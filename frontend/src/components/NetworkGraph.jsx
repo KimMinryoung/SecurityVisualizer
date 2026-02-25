@@ -19,6 +19,15 @@ const DEVICE_COLORS = {
   other:       '#64748b',
 }
 
+const REQUIRED_TYPES = ['antivirus', 'EDR', 'firewall']
+const COVERAGE_COLORS = { full: '#16a34a', partial: '#ca8a04', missing: '#dc2626' }
+
+function coverageStatus(solutions = []) {
+  if (!solutions.length) return 'missing'
+  const active = solutions.filter(s => s.status === 'active')
+  return REQUIRED_TYPES.every(t => active.some(s => s.type === t)) ? 'full' : 'partial'
+}
+
 function networkEmoji(name = '') {
   const n = name.toLowerCase()
   if (n.includes('dmz'))                               return '🛡️'
@@ -153,7 +162,7 @@ function buildStylesheet() {
 
 // ── Element builder ──────────────────────────────────────────────────────────
 
-function toElements(topology, myDeviceId, gatewayRoles) {
+function toElements(topology, myDeviceId, gatewayRoles, coverageMode) {
   const elements = []
 
   // Internet (synthetic)
@@ -188,6 +197,7 @@ function toElements(topology, myDeviceId, gatewayRoles) {
   for (const node of topology.nodes) {
     if (node.type !== 'device') continue
     const deviceType = node.data?.device_type || 'other'
+    const solutions  = node.data?.solutions || []
     const emoji    = DEVICE_EMOJI[deviceType] || '📱'
     const hostname = node.data?.hostname || node.label
     const ip       = node.data?.ip_address || ''
@@ -212,7 +222,9 @@ function toElements(topology, myDeviceId, gatewayRoles) {
         deviceId: node.data?.id,          // 백엔드 정수 id 보존 (API 호출용)
         label: `${emoji}\n${hostname}\n${ip}`,
         type: 'device',
-        bgColor: DEVICE_COLORS[deviceType] || '#64748b',
+        bgColor: coverageMode
+          ? COVERAGE_COLORS[coverageStatus(solutions)]
+          : DEVICE_COLORS[deviceType] || '#64748b',
         isMyDevice: isMyDev ? 'true' : 'false',
       },
     })
@@ -230,7 +242,7 @@ function toElements(topology, myDeviceId, gatewayRoles) {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, onNodeClick }) {
+export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, onNodeClick, coverageMode = false, filterTypes = new Set() }) {
   const containerRef = useRef(null)
   const cyRef = useRef(null)
   const topologyRef = useRef(null)
@@ -282,7 +294,7 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
     if (topologyChanged) {
       // 전체 재렌더 + 레이아웃 재계산
       cy.elements().remove()
-      cy.add(toElements(topology, myDeviceId, gatewayRoles))
+      cy.add(toElements(topology, myDeviceId, gatewayRoles, coverageMode))
       cy.layout({
         name: 'cose',
         animate: false,
@@ -315,6 +327,30 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
     }
   }, [topology, myDeviceId, gatewayRoles])
 
+  // coverage 색상 + dim 필터 (coverageMode, filterTypes, topology 변경 시)
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy || !topology) return
+    for (const node of topology.nodes) {
+      if (node.type !== 'device') continue
+      const solutions  = node.data?.solutions || []
+      const deviceType = node.data?.device_type || 'other'
+      cy.getElementById(node.id)?.data({
+        bgColor: coverageMode
+          ? COVERAGE_COLORS[coverageStatus(solutions)]
+          : DEVICE_COLORS[deviceType] || '#64748b',
+      })
+      const wrap = cy.getElementById(`wrap-${node.id}`)
+      if (filterTypes.size > 0) {
+        const activeTypes = new Set(solutions.filter(s => s.status === 'active').map(s => s.type))
+        const lacking = [...filterTypes].some(t => !activeTypes.has(t))
+        wrap?.style('opacity', lacking ? 1 : 0.15)
+      } else {
+        wrap?.style('opacity', 1)
+      }
+    }
+  }, [coverageMode, filterTypes, topology])
+
   function fit()     { cyRef.current?.fit(undefined, 60) }
   function zoomIn()  { const cy = cyRef.current; cy?.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }) }
   function zoomOut() { const cy = cyRef.current; cy?.zoom({ level: cy.zoom() / 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }) }
@@ -331,7 +367,7 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
           }}>{lbl}</button>
         ))}
       </div>
-      <Legend />
+      <Legend coverageMode={coverageMode} />
     </div>
   )
 }
@@ -350,7 +386,13 @@ const LEGEND_ITEMS = [
   { emoji: '🔀', label: '기본 게이트웨이' },
 ]
 
-function Legend() {
+const COVERAGE_LEGEND = [
+  { dot: COVERAGE_COLORS.full,    label: '완전 커버 (AV+EDR+FW)' },
+  { dot: COVERAGE_COLORS.partial, label: '일부 누락' },
+  { dot: COVERAGE_COLORS.missing, label: '솔루션 없음' },
+]
+
+function Legend({ coverageMode }) {
   return (
     <div style={{
       position: 'absolute', bottom: 16, left: 16,
@@ -361,12 +403,21 @@ function Legend() {
       <div style={{ fontWeight: 700, marginBottom: 8, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         범례 (Legend)
       </div>
-      {LEGEND_ITEMS.map(({ emoji, label }) => (
-        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
-          <span style={{ fontSize: 14, lineHeight: 1 }}>{emoji}</span>
-          <span style={{ fontSize: 11 }}>{label}</span>
-        </div>
-      ))}
+      {coverageMode ? (
+        COVERAGE_LEGEND.map(({ dot, label }) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+            <span style={{ width: 12, height: 12, borderRadius: '50%', background: dot, display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ fontSize: 11 }}>{label}</span>
+          </div>
+        ))
+      ) : (
+        LEGEND_ITEMS.map(({ emoji, label }) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+            <span style={{ fontSize: 14, lineHeight: 1 }}>{emoji}</span>
+            <span style={{ fontSize: 11 }}>{label}</span>
+          </div>
+        ))
+      )}
     </div>
   )
 }

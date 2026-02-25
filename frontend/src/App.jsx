@@ -12,6 +12,8 @@ export default function App() {
   const [myDeviceId, setMyDeviceId] = useState(() => localStorage.getItem('myDeviceId'))
   // {ip: "Wi-Fi 기본 게이트웨이"} — 인터페이스 정보로부터 도출
   const [gatewayRoles, setGatewayRoles] = useState({})
+  const [coverageMode, setCoverageMode] = useState(false)
+  const [filterTypes, setFilterTypes] = useState(new Set())
 
   function handleSetMyDevice(id) {
     const sid = String(id)
@@ -63,7 +65,15 @@ export default function App() {
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <Toolbar networks={networks} onRefresh={loadData} />
+      <Toolbar
+        networks={networks}
+        onRefresh={loadData}
+        coverageMode={coverageMode}
+        setCoverageMode={setCoverageMode}
+        filterTypes={filterTypes}
+        setFilterTypes={setFilterTypes}
+        topology={topology}
+      />
 
       {error && (
         <div style={{
@@ -80,6 +90,8 @@ export default function App() {
           myDeviceId={myDeviceId}
           gatewayRoles={gatewayRoles}
           onNodeClick={setSelectedNode}
+          coverageMode={coverageMode}
+          filterTypes={filterTypes}
         />
         <DevicePanel
           selectedNode={selectedNode}

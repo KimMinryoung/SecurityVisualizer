@@ -38,7 +38,10 @@ def get_topology(db: Session = Depends(get_db)):
 
     # Device nodes
     for dev in devices:
-        solution_names = [ds.solution.name for ds in dev.device_solutions if ds.solution]
+        solutions_data = [
+            {"name": ds.solution.name, "type": ds.solution.type, "status": ds.status}
+            for ds in dev.device_solutions if ds.solution
+        ]
         nodes.append(TopologyNode(
             id=f"dev-{dev.id}",
             label=dev.hostname,
@@ -53,7 +56,7 @@ def get_topology(db: Session = Depends(get_db)):
                 "device_type": dev.device_type,
                 "status": dev.status,
                 "network_id": dev.network_id,
-                "solutions": solution_names,
+                "solutions": solutions_data,
             }
         ))
 

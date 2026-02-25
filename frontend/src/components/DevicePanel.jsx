@@ -46,6 +46,8 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
   const [loading, setLoading] = useState(false)
   const [assignError, setAssignError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [showNewSol, setShowNewSol] = useState(false)
+  const [newSol, setNewSol] = useState({ name: '', type: 'antivirus', vendor: '' })
 
   useEffect(() => {
     setConfirmDelete(false)
@@ -75,6 +77,24 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
     try {
       await api.deleteDevice(device.id)
       onDeselect()
+      onRefresh()
+    } catch (e) {
+      setAssignError(e.message)
+    }
+  }
+
+  async function handleCreateAndAssign(e) {
+    e.preventDefault()
+    setAssignError('')
+    try {
+      const created = await api.createSolution({ name: newSol.name, type: newSol.type, vendor: newSol.vendor || undefined })
+      const updated = await api.listSolutions()
+      setAllSolutions(updated)
+      await api.assignSolution(device.id, { solution_id: created.id, status: 'active' })
+      const refreshed = await api.getDevice(device.id)
+      setDevice(refreshed)
+      setShowNewSol(false)
+      setNewSol({ name: '', type: 'antivirus', vendor: '' })
       onRefresh()
     } catch (e) {
       setAssignError(e.message)
@@ -226,6 +246,49 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
                     </select>
                   </div>
                 )}
+
+                {/* 새 솔루션 추가 */}
+                {!showNewSol ? (
+                  <button
+                    onClick={() => setShowNewSol(true)}
+                    style={{
+                      marginTop: 10, width: '100%', padding: '5px 0',
+                      background: 'none', border: '1px dashed #2d3148',
+                      borderRadius: 6, color: '#4a5568', fontSize: 12, cursor: 'pointer',
+                    }}
+                  >
+                    + 새 솔루션 추가
+                  </button>
+                ) : (
+                  <form onSubmit={handleCreateAndAssign} style={{ marginTop: 10, background: '#0f1117', border: '1px solid #2d3148', borderRadius: 8, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 11, color: '#7c8cf8', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase' }}>새 솔루션 등록 &amp; 할당</div>
+                    <input
+                      required
+                      placeholder="이름 (예: Windows Defender)"
+                      value={newSol.name}
+                      onChange={e => setNewSol(s => ({ ...s, name: e.target.value }))}
+                      style={{ width: '100%', padding: '5px 8px', background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 5, color: '#e2e8f0', fontSize: 12, marginBottom: 6, boxSizing: 'border-box' }}
+                    />
+                    <select
+                      value={newSol.type}
+                      onChange={e => setNewSol(s => ({ ...s, type: e.target.value }))}
+                      style={{ width: '100%', padding: '5px 8px', background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 5, color: '#e2e8f0', fontSize: 12, marginBottom: 6 }}
+                    >
+                      {['antivirus', 'EDR', 'DRM', 'firewall', 'other'].map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                    <input
+                      placeholder="제조사 (선택)"
+                      value={newSol.vendor}
+                      onChange={e => setNewSol(s => ({ ...s, vendor: e.target.value }))}
+                      style={{ width: '100%', padding: '5px 8px', background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 5, color: '#e2e8f0', fontSize: 12, marginBottom: 8, boxSizing: 'border-box' }}
+                    />
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="submit" style={{ flex: 1, padding: '5px 0', background: '#4f5fef', border: 'none', borderRadius: 5, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>등록 &amp; 할당</button>
+                      <button type="button" onClick={() => setShowNewSol(false)} style={{ flex: 1, padding: '5px 0', background: '#2d3148', border: 'none', borderRadius: 5, color: '#94a3b8', fontSize: 12, cursor: 'pointer' }}>취소</button>
+                    </div>
+                  </form>
+                )}
+
                 {assignError && <p style={{ color: '#fc8181', fontSize: '12px', marginTop: 6 }}>{assignError}</p>}
               </div>
 

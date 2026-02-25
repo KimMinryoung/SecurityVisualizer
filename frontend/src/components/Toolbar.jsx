@@ -2,6 +2,26 @@ import { useState } from 'react'
 import { api } from '../api/client.js'
 import ScanDialog from './ScanDialog.jsx'
 
+const REQUIRED_TYPES = ['antivirus', 'EDR', 'firewall']
+const COVERAGE_COLORS = { full: '#16a34a', partial: '#ca8a04', missing: '#dc2626' }
+const FILTER_CHIPS = ['antivirus', 'EDR', 'DRM', 'firewall', 'other']
+
+function coverageStatus(solutions = []) {
+  if (!solutions.length) return 'missing'
+  const active = solutions.filter(s => s.status === 'active')
+  return REQUIRED_TYPES.every(t => active.some(s => s.type === t)) ? 'full' : 'partial'
+}
+
+function calcStats(topology) {
+  const counts = { full: 0, partial: 0, missing: 0 }
+  if (!topology) return counts
+  for (const node of topology.nodes) {
+    if (node.type !== 'device') continue
+    counts[coverageStatus(node.data?.solutions || [])]++
+  }
+  return counts
+}
+
 const styles = {
   bar: {
     display: 'flex', alignItems: 'center', gap: '12px',
@@ -22,7 +42,7 @@ const styles = {
   },
 }
 
-export default function Toolbar({ networks, onRefresh }) {
+export default function Toolbar({ networks, onRefresh, coverageMode, setCoverageMode, filterTypes, setFilterTypes, topology }) {
   const [showAddDevice, setShowAddDevice] = useState(false)
   const [showAddNetwork, setShowAddNetwork] = useState(false)
   const [showScan, setShowScan] = useState(false)
@@ -63,6 +83,16 @@ export default function Toolbar({ networks, onRefresh }) {
     }
   }
 
+  const stats = calcStats(topology)
+
+  function toggleFilter(type) {
+    setFilterTypes(prev => {
+      const next = new Set(prev)
+      next.has(type) ? next.delete(type) : next.add(type)
+      return next
+    })
+  }
+
   return (
     <>
       <div style={styles.bar}>
@@ -76,6 +106,47 @@ export default function Toolbar({ networks, onRefresh }) {
         <button style={{ ...styles.btn, background: '#0c4a6e', color: '#7dd3fc' }} onClick={() => setShowScan(true)}>
           🔍 스캔
         </button>
+        <button
+          style={{
+            ...styles.btn,
+            background: coverageMode ? '#14532d' : '#2d3148',
+            color: coverageMode ? '#4ade80' : '#a0aec0',
+            border: coverageMode ? '1px solid #16a34a' : '1px solid #4a5568',
+          }}
+          onClick={() => {
+            setCoverageMode(v => !v)
+            setFilterTypes(new Set())
+          }}
+        >
+          🛡️ 커버리지{coverageMode ? ' ✓' : ''}
+        </button>
+        {coverageMode && (
+          <>
+            <div style={{ width: 1, height: 20, background: '#2d3148', margin: '0 4px' }} />
+            {FILTER_CHIPS.map(type => (
+              <button
+                key={type}
+                onClick={() => toggleFilter(type)}
+                style={{
+                  ...styles.btn,
+                  padding: '4px 10px',
+                  fontSize: '12px',
+                  background: filterTypes.has(type) ? '#7c2d12' : '#2d3148',
+                  color: filterTypes.has(type) ? '#fca5a5' : '#94a3b8',
+                  border: filterTypes.has(type) ? '1px solid #dc2626' : '1px solid #4a5568',
+                }}
+              >
+                {type}
+              </button>
+            ))}
+            <div style={{ width: 1, height: 20, background: '#2d3148', margin: '0 4px' }} />
+            <span style={{ fontSize: 13, color: '#94a3b8', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ color: COVERAGE_COLORS.full }}>🟢 {stats.full}</span>
+              <span style={{ color: COVERAGE_COLORS.partial }}>🟡 {stats.partial}</span>
+              <span style={{ color: COVERAGE_COLORS.missing }}>🔴 {stats.missing}</span>
+            </span>
+          </>
+        )}
         <div style={styles.spacer} />
         <span style={styles.badge}>{networks.length} networks</span>
       </div>
