@@ -6,6 +6,20 @@ const REQUIRED_TYPES = ['antivirus', 'EDR', 'firewall']
 const COVERAGE_COLORS = { full: '#16a34a', partial: '#ca8a04', missing: '#dc2626' }
 const FILTER_CHIPS = ['antivirus', 'EDR', 'DRM', 'firewall', 'other']
 
+const SEVERITY_CHIPS = ['critical', 'high', 'medium', 'low']
+const VULN_COLORS = { critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#65a30d' }
+
+function calcVulnStats(topology) {
+  const counts = { critical: 0, high: 0, medium: 0, low: 0 }
+  for (const node of topology?.nodes ?? []) {
+    if (node.type !== 'device') continue
+    for (const v of (node.data?.vulnerabilities ?? [])) {
+      if (v.status === 'open' && counts[v.severity] !== undefined) counts[v.severity]++
+    }
+  }
+  return counts
+}
+
 function coverageStatus(solutions = []) {
   if (!solutions.length) return 'missing'
   const active = solutions.filter(s => s.status === 'active')
@@ -42,7 +56,7 @@ const styles = {
   },
 }
 
-export default function Toolbar({ networks, onRefresh, coverageMode, setCoverageMode, filterTypes, setFilterTypes, topology }) {
+export default function Toolbar({ networks, onRefresh, coverageMode, setCoverageMode, filterTypes, setFilterTypes, topology, vulnMode, setVulnMode, vulnSeverityFilter, setVulnSeverityFilter }) {
   const [showAddDevice, setShowAddDevice] = useState(false)
   const [showAddNetwork, setShowAddNetwork] = useState(false)
   const [showScan, setShowScan] = useState(false)
@@ -84,11 +98,20 @@ export default function Toolbar({ networks, onRefresh, coverageMode, setCoverage
   }
 
   const stats = calcStats(topology)
+  const vulnStats = calcVulnStats(topology)
 
   function toggleFilter(type) {
     setFilterTypes(prev => {
       const next = new Set(prev)
       next.has(type) ? next.delete(type) : next.add(type)
+      return next
+    })
+  }
+
+  function toggleVulnFilter(severity) {
+    setVulnSeverityFilter(prev => {
+      const next = new Set(prev)
+      next.has(severity) ? next.delete(severity) : next.add(severity)
       return next
     })
   }
@@ -116,6 +139,7 @@ export default function Toolbar({ networks, onRefresh, coverageMode, setCoverage
           onClick={() => {
             setCoverageMode(v => !v)
             setFilterTypes(new Set())
+            if (!coverageMode) { setVulnMode(false); setVulnSeverityFilter(new Set()) }
           }}
         >
           🛡️ 커버리지{coverageMode ? ' ✓' : ''}
@@ -144,6 +168,48 @@ export default function Toolbar({ networks, onRefresh, coverageMode, setCoverage
               <span style={{ color: COVERAGE_COLORS.full }}>🟢 {stats.full}</span>
               <span style={{ color: COVERAGE_COLORS.partial }}>🟡 {stats.partial}</span>
               <span style={{ color: COVERAGE_COLORS.missing }}>🔴 {stats.missing}</span>
+            </span>
+          </>
+        )}
+        <button
+          style={{
+            ...styles.btn,
+            background: vulnMode ? '#450a0a' : '#2d3148',
+            color: vulnMode ? '#fca5a5' : '#a0aec0',
+            border: vulnMode ? '1px solid #dc2626' : '1px solid #4a5568',
+          }}
+          onClick={() => {
+            setVulnMode(v => !v)
+            setVulnSeverityFilter(new Set())
+            if (!vulnMode) { setCoverageMode(false); setFilterTypes(new Set()) }
+          }}
+        >
+          🐛 취약점{vulnMode ? ' ✓' : ''}
+        </button>
+        {vulnMode && (
+          <>
+            <div style={{ width: 1, height: 20, background: '#2d3148', margin: '0 4px' }} />
+            {SEVERITY_CHIPS.map(sev => (
+              <button
+                key={sev}
+                onClick={() => toggleVulnFilter(sev)}
+                style={{
+                  ...styles.btn,
+                  padding: '4px 10px',
+                  fontSize: '12px',
+                  background: vulnSeverityFilter.has(sev) ? VULN_COLORS[sev] + '33' : '#2d3148',
+                  color: vulnSeverityFilter.has(sev) ? VULN_COLORS[sev] : '#94a3b8',
+                  border: vulnSeverityFilter.has(sev) ? `1px solid ${VULN_COLORS[sev]}` : '1px solid #4a5568',
+                }}
+              >
+                {sev}
+              </button>
+            ))}
+            <div style={{ width: 1, height: 20, background: '#2d3148', margin: '0 4px' }} />
+            <span style={{ fontSize: 13, color: '#94a3b8', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {SEVERITY_CHIPS.map(sev => vulnStats[sev] > 0 && (
+                <span key={sev} style={{ color: VULN_COLORS[sev] }}>{sev[0].toUpperCase()} {vulnStats[sev]}</span>
+              ))}
             </span>
           </>
         )}

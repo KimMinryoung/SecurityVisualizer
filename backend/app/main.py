@@ -5,6 +5,7 @@ from .database import engine
 from . import models
 from .routers import networks, devices, topology, scan
 from .routers.solutions import sol_router, assign_router
+from .routers.vulnerabilities import router as vuln_router
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -24,6 +25,7 @@ app.include_router(sol_router)
 app.include_router(assign_router)
 app.include_router(topology.router)
 app.include_router(scan.router)
+app.include_router(vuln_router)
 
 
 @app.get("/api/whoami")

@@ -45,4 +45,10 @@ export const api = {
   listDeviceSolutions: (deviceId) => req('GET', `/api/devices/${deviceId}/solutions`),
   assignSolution: (deviceId, data) => req('POST', `/api/devices/${deviceId}/solutions`, data),
   unassignSolution: (deviceId, assignmentId) => req('DELETE', `/api/devices/${deviceId}/solutions/${assignmentId}`),
+
+  // Device vulnerabilities
+  listDeviceVulns:  (deviceId) => req('GET',    `/api/devices/${deviceId}/vulnerabilities`),
+  addVuln:          (deviceId, data) => req('POST',   `/api/devices/${deviceId}/vulnerabilities`, data),
+  updateVulnStatus: (deviceId, vid, data) => req('PATCH',  `/api/devices/${deviceId}/vulnerabilities/${vid}`, data),
+  deleteVuln:       (deviceId, vid) => req('DELETE', `/api/devices/${deviceId}/vulnerabilities/${vid}`),
 }

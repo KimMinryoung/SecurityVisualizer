@@ -14,6 +14,8 @@ export default function App() {
   const [gatewayRoles, setGatewayRoles] = useState({})
   const [coverageMode, setCoverageMode] = useState(false)
   const [filterTypes, setFilterTypes] = useState(new Set())
+  const [vulnMode, setVulnMode] = useState(false)
+  const [vulnSeverityFilter, setVulnSeverityFilter] = useState(new Set())
 
   function handleSetMyDevice(id) {
     const sid = String(id)
@@ -73,6 +75,10 @@ export default function App() {
         filterTypes={filterTypes}
         setFilterTypes={setFilterTypes}
         topology={topology}
+        vulnMode={vulnMode}
+        setVulnMode={setVulnMode}
+        vulnSeverityFilter={vulnSeverityFilter}
+        setVulnSeverityFilter={setVulnSeverityFilter}
       />
 
       {error && (
@@ -92,6 +98,8 @@ export default function App() {
           onNodeClick={setSelectedNode}
           coverageMode={coverageMode}
           filterTypes={filterTypes}
+          vulnMode={vulnMode}
+          vulnSeverityFilter={vulnSeverityFilter}
         />
         <DevicePanel
           selectedNode={selectedNode}

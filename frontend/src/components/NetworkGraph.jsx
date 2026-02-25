@@ -22,6 +22,17 @@ const DEVICE_COLORS = {
 const REQUIRED_TYPES = ['antivirus', 'EDR', 'firewall']
 const COVERAGE_COLORS = { full: '#16a34a', partial: '#ca8a04', missing: '#dc2626' }
 
+const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low']
+const VULN_COLORS = { critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#65a30d' }
+
+function worstSeverity(vulns = []) {
+  const open = vulns.filter(v => v.status === 'open')
+  for (const s of SEVERITY_ORDER) {
+    if (open.some(v => v.severity === s)) return s
+  }
+  return null
+}
+
 function coverageStatus(solutions = []) {
   if (!solutions.length) return 'missing'
   const active = solutions.filter(s => s.status === 'active')
@@ -162,7 +173,7 @@ function buildStylesheet() {
 
 // ── Element builder ──────────────────────────────────────────────────────────
 
-function toElements(topology, myDeviceId, gatewayRoles, coverageMode) {
+function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode) {
   const elements = []
 
   // Internet (synthetic)
@@ -198,6 +209,7 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode) {
     if (node.type !== 'device') continue
     const deviceType = node.data?.device_type || 'other'
     const solutions  = node.data?.solutions || []
+    const vulns      = node.data?.vulnerabilities || []
     const emoji    = DEVICE_EMOJI[deviceType] || '📱'
     const hostname = node.data?.hostname || node.label
     const ip       = node.data?.ip_address || ''
@@ -224,7 +236,10 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode) {
         type: 'device',
         bgColor: coverageMode
           ? COVERAGE_COLORS[coverageStatus(solutions)]
-          : DEVICE_COLORS[deviceType] || '#64748b',
+          : vulnMode
+            ? (VULN_COLORS[worstSeverity(vulns)] ?? DEVICE_COLORS[deviceType] ?? '#64748b')
+            : DEVICE_COLORS[deviceType] ?? '#64748b',
+        vulnerabilities: vulns,
         isMyDevice: isMyDev ? 'true' : 'false',
       },
     })
@@ -242,7 +257,7 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode) {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, onNodeClick, coverageMode = false, filterTypes = new Set() }) {
+export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, onNodeClick, coverageMode = false, filterTypes = new Set(), vulnMode = false, vulnSeverityFilter = new Set() }) {
   const containerRef = useRef(null)
   const cyRef = useRef(null)
   const topologyRef = useRef(null)
@@ -294,7 +309,7 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
     if (topologyChanged) {
       // 전체 재렌더 + 레이아웃 재계산
       cy.elements().remove()
-      cy.add(toElements(topology, myDeviceId, gatewayRoles, coverageMode))
+      cy.add(toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode))
       cy.layout({
         name: 'cose',
         animate: false,
@@ -327,29 +342,36 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
     }
   }, [topology, myDeviceId, gatewayRoles])
 
-  // coverage 색상 + dim 필터 (coverageMode, filterTypes, topology 변경 시)
+  // 색상 + dim 필터 (coverageMode, filterTypes, vulnMode, vulnSeverityFilter, topology 변경 시)
   useEffect(() => {
     const cy = cyRef.current
     if (!cy || !topology) return
     for (const node of topology.nodes) {
       if (node.type !== 'device') continue
       const solutions  = node.data?.solutions || []
+      const vulns      = node.data?.vulnerabilities || []
       const deviceType = node.data?.device_type || 'other'
       cy.getElementById(node.id)?.data({
         bgColor: coverageMode
           ? COVERAGE_COLORS[coverageStatus(solutions)]
-          : DEVICE_COLORS[deviceType] || '#64748b',
+          : vulnMode
+            ? (VULN_COLORS[worstSeverity(vulns)] ?? DEVICE_COLORS[deviceType] ?? '#64748b')
+            : DEVICE_COLORS[deviceType] ?? '#64748b',
       })
       const wrap = cy.getElementById(`wrap-${node.id}`)
-      if (filterTypes.size > 0) {
+      if (coverageMode && filterTypes.size > 0) {
         const activeTypes = new Set(solutions.filter(s => s.status === 'active').map(s => s.type))
         const lacking = [...filterTypes].some(t => !activeTypes.has(t))
         wrap?.style('opacity', lacking ? 1 : 0.15)
+      } else if (vulnMode && vulnSeverityFilter.size > 0) {
+        const openSeverities = new Set(vulns.filter(v => v.status === 'open').map(v => v.severity))
+        const matches = [...vulnSeverityFilter].some(s => openSeverities.has(s))
+        wrap?.style('opacity', matches ? 1 : 0.15)
       } else {
         wrap?.style('opacity', 1)
       }
     }
-  }, [coverageMode, filterTypes, topology])
+  }, [coverageMode, filterTypes, vulnMode, vulnSeverityFilter, topology])
 
   function fit()     { cyRef.current?.fit(undefined, 60) }
   function zoomIn()  { const cy = cyRef.current; cy?.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }) }
@@ -367,7 +389,7 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
           }}>{lbl}</button>
         ))}
       </div>
-      <Legend coverageMode={coverageMode} />
+      <Legend coverageMode={coverageMode} vulnMode={vulnMode} />
     </div>
   )
 }
@@ -392,7 +414,14 @@ const COVERAGE_LEGEND = [
   { dot: COVERAGE_COLORS.missing, label: '솔루션 없음' },
 ]
 
-function Legend({ coverageMode }) {
+const VULN_LEGEND = [
+  { dot: VULN_COLORS.critical, label: 'Critical' },
+  { dot: VULN_COLORS.high,     label: 'High' },
+  { dot: VULN_COLORS.medium,   label: 'Medium' },
+  { dot: VULN_COLORS.low,      label: 'Low' },
+]
+
+function Legend({ coverageMode, vulnMode }) {
   return (
     <div style={{
       position: 'absolute', bottom: 16, left: 16,
@@ -405,6 +434,13 @@ function Legend({ coverageMode }) {
       </div>
       {coverageMode ? (
         COVERAGE_LEGEND.map(({ dot, label }) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+            <span style={{ width: 12, height: 12, borderRadius: '50%', background: dot, display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ fontSize: 11 }}>{label}</span>
+          </div>
+        ))
+      ) : vulnMode ? (
+        VULN_LEGEND.map(({ dot, label }) => (
           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
             <span style={{ width: 12, height: 12, borderRadius: '50%', background: dot, display: 'inline-block', flexShrink: 0 }} />
             <span style={{ fontSize: 11 }}>{label}</span>

@@ -34,6 +34,8 @@ const TYPE_COLORS = {
   other: '#718096',
 }
 
+const SEVERITY_COLORS = { critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#65a30d' }
+
 const STATUS_COLORS = {
   active: '#38a169',
   inactive: '#718096',
@@ -48,15 +50,68 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [showNewSol, setShowNewSol] = useState(false)
   const [newSol, setNewSol] = useState({ name: '', type: 'antivirus', vendor: '' })
+  const [vulns, setVulns] = useState([])
+  const [showAddVuln, setShowAddVuln] = useState(false)
+  const [newVuln, setNewVuln] = useState({ cve_id: '', title: '', severity: 'medium', description: '' })
+  const [vulnError, setVulnError] = useState('')
 
   useEffect(() => {
     setConfirmDelete(false)
+    setVulns([])
+    setShowAddVuln(false)
+    setVulnError('')
     if (selectedNode?.type !== 'device') { setDevice(null); return }
+    const devId = selectedNode.data.deviceId
     setLoading(true)
-    api.getDevice(selectedNode.data.deviceId)
-      .then(setDevice)
+    Promise.all([api.getDevice(devId), api.listDeviceVulns(devId)])
+      .then(([dev, vs]) => { setDevice(dev); setVulns(vs) })
       .finally(() => setLoading(false))
   }, [selectedNode])
+
+  async function loadVulns(devId) {
+    const vs = await api.listDeviceVulns(devId)
+    setVulns(vs)
+  }
+
+  async function handleAddVuln(e) {
+    e.preventDefault()
+    setVulnError('')
+    try {
+      await api.addVuln(device.id, {
+        cve_id: newVuln.cve_id || undefined,
+        title: newVuln.title,
+        severity: newVuln.severity,
+        description: newVuln.description || undefined,
+        status: 'open',
+      })
+      await loadVulns(device.id)
+      setShowAddVuln(false)
+      setNewVuln({ cve_id: '', title: '', severity: 'medium', description: '' })
+      onRefresh()
+    } catch (e) {
+      setVulnError(e.message)
+    }
+  }
+
+  async function handleVulnStatus(vid, status) {
+    try {
+      await api.updateVulnStatus(device.id, vid, { status })
+      await loadVulns(device.id)
+      onRefresh()
+    } catch (e) {
+      setVulnError(e.message)
+    }
+  }
+
+  async function handleDeleteVuln(vid) {
+    try {
+      await api.deleteVuln(device.id, vid)
+      await loadVulns(device.id)
+      onRefresh()
+    } catch (e) {
+      setVulnError(e.message)
+    }
+  }
 
   useEffect(() => {
     api.listSolutions().then(setAllSolutions)
@@ -290,6 +345,113 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
                 )}
 
                 {assignError && <p style={{ color: '#fc8181', fontSize: '12px', marginTop: 6 }}>{assignError}</p>}
+              </div>
+
+              {/* Vulnerabilities */}
+              <div style={S.section}>
+                <div style={S.sectionTitle}>Vulnerabilities</div>
+                {vulns.length === 0 && (
+                  <div style={{ color: '#4a5568', fontSize: '12px' }}>취약점 없음</div>
+                )}
+                {vulns.map(v => {
+                  const patched = v.status !== 'open'
+                  return (
+                    <div key={v.id} style={{
+                      marginBottom: 8, padding: '7px 10px',
+                      background: '#0f1117', borderRadius: 7,
+                      border: `1px solid ${patched ? '#2d3148' : (SEVERITY_COLORS[v.severity] + '44')}`,
+                      opacity: patched ? 0.55 : 1,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                        {v.cve_id && (
+                          <span style={{ fontSize: 10, color: '#94a3b8', fontFamily: 'monospace' }}>{v.cve_id}</span>
+                        )}
+                        <span style={{
+                          fontSize: 10, padding: '1px 6px', borderRadius: 8,
+                          background: SEVERITY_COLORS[v.severity] + '22',
+                          color: SEVERITY_COLORS[v.severity],
+                          border: `1px solid ${SEVERITY_COLORS[v.severity]}44`,
+                          fontWeight: 600, textTransform: 'uppercase',
+                        }}>{v.severity}</span>
+                        <span style={{ fontSize: 10, color: '#64748b', marginLeft: 'auto' }}>{v.status}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: patched ? '#64748b' : '#e2e8f0', textDecoration: patched ? 'line-through' : 'none' }}>
+                        {v.title}
+                      </div>
+                      {!patched && (
+                        <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
+                          <button
+                            onClick={() => handleVulnStatus(v.id, 'patched')}
+                            style={{ flex: 1, padding: '3px 0', background: '#14532d', border: 'none', borderRadius: 5, color: '#4ade80', fontSize: 11, cursor: 'pointer' }}
+                          >패치</button>
+                          <button
+                            onClick={() => handleVulnStatus(v.id, 'ignored')}
+                            style={{ flex: 1, padding: '3px 0', background: '#1e2235', border: '1px solid #2d3148', borderRadius: 5, color: '#94a3b8', fontSize: 11, cursor: 'pointer' }}
+                          >무시</button>
+                          <button
+                            onClick={() => handleDeleteVuln(v.id)}
+                            style={{ padding: '3px 8px', background: 'none', border: 'none', color: '#4a5568', cursor: 'pointer', fontSize: 14 }}
+                          >×</button>
+                        </div>
+                      )}
+                      {patched && (
+                        <button
+                          onClick={() => handleDeleteVuln(v.id)}
+                          style={{ marginTop: 4, padding: '2px 8px', background: 'none', border: 'none', color: '#4a5568', cursor: 'pointer', fontSize: 12 }}
+                        >삭제</button>
+                      )}
+                    </div>
+                  )
+                })}
+
+                {!showAddVuln ? (
+                  <button
+                    onClick={() => setShowAddVuln(true)}
+                    style={{
+                      marginTop: 8, width: '100%', padding: '5px 0',
+                      background: 'none', border: '1px dashed #2d3148',
+                      borderRadius: 6, color: '#4a5568', fontSize: 12, cursor: 'pointer',
+                    }}
+                  >
+                    + 취약점 추가
+                  </button>
+                ) : (
+                  <form onSubmit={handleAddVuln} style={{ marginTop: 8, background: '#0f1117', border: '1px solid #2d3148', borderRadius: 8, padding: '10px 12px' }}>
+                    <div style={{ fontSize: 11, color: '#7c8cf8', fontWeight: 600, marginBottom: 8, textTransform: 'uppercase' }}>취약점 등록</div>
+                    <input
+                      placeholder="CVE ID (예: CVE-2024-1234, 선택)"
+                      value={newVuln.cve_id}
+                      onChange={e => setNewVuln(s => ({ ...s, cve_id: e.target.value }))}
+                      style={{ width: '100%', padding: '5px 8px', background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 5, color: '#e2e8f0', fontSize: 12, marginBottom: 6, boxSizing: 'border-box' }}
+                    />
+                    <input
+                      required
+                      placeholder="제목 *"
+                      value={newVuln.title}
+                      onChange={e => setNewVuln(s => ({ ...s, title: e.target.value }))}
+                      style={{ width: '100%', padding: '5px 8px', background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 5, color: '#e2e8f0', fontSize: 12, marginBottom: 6, boxSizing: 'border-box' }}
+                    />
+                    <select
+                      value={newVuln.severity}
+                      onChange={e => setNewVuln(s => ({ ...s, severity: e.target.value }))}
+                      style={{ width: '100%', padding: '5px 8px', background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 5, color: '#e2e8f0', fontSize: 12, marginBottom: 6 }}
+                    >
+                      {['critical', 'high', 'medium', 'low'].map(sev => <option key={sev} value={sev}>{sev}</option>)}
+                    </select>
+                    <textarea
+                      placeholder="설명 (선택)"
+                      value={newVuln.description}
+                      onChange={e => setNewVuln(s => ({ ...s, description: e.target.value }))}
+                      rows={2}
+                      style={{ width: '100%', padding: '5px 8px', background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 5, color: '#e2e8f0', fontSize: 12, marginBottom: 8, boxSizing: 'border-box', resize: 'vertical' }}
+                    />
+                    {vulnError && <p style={{ color: '#fc8181', fontSize: '11px', marginBottom: 6 }}>{vulnError}</p>}
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="submit" style={{ flex: 1, padding: '5px 0', background: '#dc2626', border: 'none', borderRadius: 5, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>등록</button>
+                      <button type="button" onClick={() => { setShowAddVuln(false); setVulnError('') }} style={{ flex: 1, padding: '5px 0', background: '#2d3148', border: 'none', borderRadius: 5, color: '#94a3b8', fontSize: 12, cursor: 'pointer' }}>취소</button>
+                    </div>
+                  </form>
+                )}
               </div>
 
               {/* 장비 삭제 */}

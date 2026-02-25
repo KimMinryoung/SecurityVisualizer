@@ -2,6 +2,32 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 
+# --- Device Vulnerability ---
+
+class DeviceVulnerabilityCreate(BaseModel):
+    cve_id: Optional[str] = None
+    title: str
+    severity: str = "medium"
+    description: Optional[str] = None
+    status: str = "open"
+
+
+class DeviceVulnerabilityOut(BaseModel):
+    id: int
+    device_id: int
+    cve_id: Optional[str]
+    title: str
+    severity: str
+    description: Optional[str]
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class DeviceVulnerabilityUpdate(BaseModel):
+    status: str  # "patched" or "ignored"
+
+
 # --- Network ---
 
 class NetworkCreate(BaseModel):
