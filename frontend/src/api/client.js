@@ -38,6 +38,7 @@ export const api = {
   createSolution: (data) => req('POST', '/api/solutions/', data),
 
   // Network scan
+  getInterfaces: () => req('GET', '/api/scan/interfaces'),
   scanNetwork: (cidr) => req('POST', '/api/scan/', { cidr }),
 
   // Device ↔ solution assignments

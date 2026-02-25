@@ -9,8 +9,9 @@ export default function App() {
   const [networks, setNetworks] = useState([])
   const [selectedNode, setSelectedNode] = useState(null)
   const [error, setError] = useState('')
-  // 자동 감지 실패 시 localStorage 수동 설정을 폴백으로 사용
   const [myDeviceId, setMyDeviceId] = useState(() => localStorage.getItem('myDeviceId'))
+  // {ip: "Wi-Fi 기본 게이트웨이"} — 인터페이스 정보로부터 도출
+  const [gatewayRoles, setGatewayRoles] = useState({})
 
   function handleSetMyDevice(id) {
     const sid = String(id)
@@ -31,6 +32,22 @@ export default function App() {
 
   useEffect(() => { loadData() }, [loadData])
 
+  // 게이트웨이 역할 맵 구성 — {ip: "어댑터명 기본 게이트웨이"}
+  useEffect(() => {
+    api.getInterfaces()
+      .then(ifaces => {
+        const roles = {}
+        for (const iface of ifaces) {
+          if (iface.gateway) {
+            const name = iface.adapter ? `${iface.adapter} 기본 게이트웨이` : '기본 게이트웨이'
+            roles[iface.gateway] = name
+          }
+        }
+        setGatewayRoles(roles)
+      })
+      .catch(() => {})
+  }, [])
+
   // topology 로드 후 접속자 IP로 내 PC 자동 감지
   useEffect(() => {
     if (!topology) return
@@ -39,13 +56,9 @@ export default function App() {
         const match = topology.nodes.find(
           n => n.type === 'device' && n.data?.ip_address === ip
         )
-        if (match) {
-          // 자동 감지 성공 — localStorage에도 저장해 새로고침 후 유지
-          handleSetMyDevice(match.data.id)
-        }
-        // 감지 실패(127.0.0.1 등)면 기존 localStorage 값 유지
+        if (match) handleSetMyDevice(match.data.id)
       })
-      .catch(() => {/* 무시 — 수동 선택 폴백 유지 */})
+      .catch(() => {})
   }, [topology])
 
   return (
@@ -65,11 +78,13 @@ export default function App() {
         <NetworkGraph
           topology={topology}
           myDeviceId={myDeviceId}
+          gatewayRoles={gatewayRoles}
           onNodeClick={setSelectedNode}
         />
         <DevicePanel
           selectedNode={selectedNode}
           myDeviceId={myDeviceId}
+          gatewayRoles={gatewayRoles}
           onSetMyDevice={handleSetMyDevice}
           onDeselect={() => setSelectedNode(null)}
           onRefresh={loadData}

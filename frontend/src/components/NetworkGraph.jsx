@@ -1,8 +1,6 @@
 import { useEffect, useRef } from 'react'
 import cytoscape from 'cytoscape'
 
-// ── Emoji & color maps ──────────────────────────────────────────────────────
-
 const DEVICE_EMOJI = {
   workstation: '💻',
   server:      '🖥️',
@@ -23,17 +21,24 @@ const DEVICE_COLORS = {
 
 function networkEmoji(name = '') {
   const n = name.toLowerCase()
-  if (n.includes('dmz'))                          return '🛡️'
+  if (n.includes('dmz'))                               return '🛡️'
   if (n.includes('mgmt') || n.includes('management')) return '⚙️'
   if (n.includes('corp') || n.includes('lan') || n.includes('office')) return '🏢'
   return '🔗'
 }
 
-// ── Cytoscape stylesheet ────────────────────────────────────────────────────
+function categoryLabel(isMyDevice, role) {
+  const parts = []
+  if (isMyDevice) parts.push('📍 내 PC')
+  if (role)       parts.push(`🔀 ${role}`)
+  return parts.join('\n')
+}
+
+// ── Stylesheet ───────────────────────────────────────────────────────────────
 
 function buildStylesheet() {
   return [
-    // 내 PC: 금색 글로우
+    // 내 PC 글로우
     {
       selector: 'node[isMyDevice="true"]',
       style: {
@@ -46,6 +51,24 @@ function buildStylesheet() {
         'shadow-offset-y': 0,
       },
     },
+    // Wrapper compound: 투명 + 카테고리 텍스트 위에
+    {
+      selector: 'node[type="device-wrapper"]',
+      style: {
+        'background-opacity': 0,
+        'border-width': 0,
+        label: 'data(categoryLabel)',
+        'text-valign': 'top',
+        'text-halign': 'center',
+        'font-size': '11px',
+        color: '#94a3b8',
+        'text-wrap': 'wrap',
+        'text-max-width': '160px',
+        padding: '4px',
+        'compound-sizing-wrt-labels': 'include',
+      },
+    },
+    // Internet
     {
       selector: 'node[type="internet"]',
       style: {
@@ -64,6 +87,7 @@ function buildStylesheet() {
         height: 55,
       },
     },
+    // Network
     {
       selector: 'node[type="network"]',
       style: {
@@ -82,33 +106,28 @@ function buildStylesheet() {
         height: 62,
       },
     },
+    // Device circle: hostname + IP 안에 표시
     {
       selector: 'node[type="device"]',
       style: {
         'background-color': 'data(bgColor)',
         'border-width': 0,
         label: 'data(label)',
-        'text-valign': 'bottom',
+        'text-valign': 'center',
         'text-halign': 'center',
         'font-size': '10px',
-        color: '#cbd5e0',
-        'text-margin-y': '5px',
+        color: '#ffffff',
         'text-wrap': 'wrap',
-        'text-max-width': '90px',
-        width: 52,
-        height: 52,
+        'text-max-width': '82px',
+        width: 90,
+        height: 90,
         shape: 'ellipse',
       },
     },
     {
       selector: 'node:selected',
-      style: {
-        'border-color': '#fff',
-        'border-width': 3,
-        'border-opacity': 1,
-      },
+      style: { 'border-color': '#fff', 'border-width': 3 },
     },
-    // Internet → network edge: dashed blue
     {
       selector: 'edge[type="internet"]',
       style: {
@@ -120,7 +139,6 @@ function buildStylesheet() {
         opacity: 0.7,
       },
     },
-    // device → network edge: subtle
     {
       selector: 'edge[type="membership"]',
       style: {
@@ -133,21 +151,15 @@ function buildStylesheet() {
   ]
 }
 
-// ── Build Cytoscape elements from topology ──────────────────────────────────
+// ── Element builder ──────────────────────────────────────────────────────────
 
-function toElements(topology, myDeviceId) {
+function toElements(topology, myDeviceId, gatewayRoles) {
   const elements = []
 
-  // --- Internet node (synthetic) ---
-  elements.push({
-    data: {
-      id: 'internet',
-      label: '🌐\nInternet',
-      type: 'internet',
-    },
-  })
+  // Internet (synthetic)
+  elements.push({ data: { id: 'internet', label: '🌐\nInternet', type: 'internet' } })
 
-  // --- Network nodes ---
+  // Network nodes + internet edges
   for (const node of topology.nodes) {
     if (node.type !== 'network') continue
     const emoji = networkEmoji(node.data?.name)
@@ -159,9 +171,7 @@ function toElements(topology, myDeviceId) {
         type: 'network',
       },
     })
-
-    // Internet → network edge (DMZ gets a direct line; others are internal)
-    const isDmzOrPublic =
+    const isPublic =
       (node.data?.name || '').toLowerCase().includes('dmz') ||
       (node.data?.subnet || '').startsWith('10.')
     elements.push({
@@ -169,59 +179,65 @@ function toElements(topology, myDeviceId) {
         id: `e-internet-${node.id}`,
         source: 'internet',
         target: node.id,
-        type: isDmzOrPublic ? 'internet' : 'membership',
+        type: isPublic ? 'internet' : 'membership',
       },
     })
   }
 
-  // --- Device nodes ---
+  // Device wrapper + device nodes
   for (const node of topology.nodes) {
     if (node.type !== 'device') continue
     const deviceType = node.data?.device_type || 'other'
-    const emoji = DEVICE_EMOJI[deviceType] || '📱'
+    const emoji    = DEVICE_EMOJI[deviceType] || '📱'
     const hostname = node.data?.hostname || node.label
-    const ip = node.data?.ip_address || ''
-    const isMyDevice = myDeviceId && String(node.data?.id) === String(myDeviceId)
-    const myBadge = isMyDevice ? '📍 내 PC\n' : ''
+    const ip       = node.data?.ip_address || ''
+    const isMyDev  = myDeviceId && String(node.data?.id) === String(myDeviceId)
+    const role     = gatewayRoles[ip]
 
+    // 투명 wrapper (카테고리 텍스트는 wrapper의 top에 표시)
+    elements.push({
+      data: {
+        id: `wrap-${node.id}`,
+        type: 'device-wrapper',
+        categoryLabel: categoryLabel(isMyDev, role),
+      },
+    })
+
+    // 장비 원 (hostname + IP를 원 안에 표시)
     elements.push({
       data: {
         ...node.data,
-        id: node.id,              // Cytoscape 식별자 "dev-1" — spread 뒤에 위치해야 덮어씌워짐
-        deviceId: node.data?.id,  // 백엔드 정수 id 별도 보존 (API 호출용)
-        label: `${myBadge}${emoji}\n${hostname}\n${ip}`,
+        id: node.id,
+        parent: `wrap-${node.id}`,
+        deviceId: node.data?.id,          // 백엔드 정수 id 보존 (API 호출용)
+        label: `${emoji}\n${hostname}\n${ip}`,
         type: 'device',
         bgColor: DEVICE_COLORS[deviceType] || '#64748b',
-        isMyDevice: isMyDevice ? 'true' : 'false',
+        isMyDevice: isMyDev ? 'true' : 'false',
       },
     })
   }
 
-  // --- Membership edges (device → network) ---
+  // Membership edges (device → network)
   for (const edge of topology.edges) {
     elements.push({
-      data: {
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        type: 'membership',
-      },
+      data: { id: edge.id, source: edge.source, target: edge.target, type: 'membership' },
     })
   }
 
   return elements
 }
 
-// ── Component ───────────────────────────────────────────────────────────────
+// ── Component ────────────────────────────────────────────────────────────────
 
-export default function NetworkGraph({ topology, myDeviceId, onNodeClick }) {
+export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, onNodeClick }) {
   const containerRef = useRef(null)
   const cyRef = useRef(null)
-  const topologyRef = useRef(null)  // topology 변경 여부 추적
+  const topologyRef = useRef(null)
 
+  // Cytoscape 초기화 (한 번만)
   useEffect(() => {
     if (!containerRef.current) return
-
     const cy = cytoscape({
       container: containerRef.current,
       elements: [],
@@ -236,22 +252,26 @@ export default function NetworkGraph({ topology, myDeviceId, onNodeClick }) {
     cy.on('tap', 'node', (evt) => {
       const node = evt.target
       if (node.data('type') === 'internet') { onNodeClick(null); return }
-      onNodeClick({
-        id: node.id(),
-        type: node.data('type'),
-        label: node.data('label'),
-        data: node.data(),
-      })
+
+      // wrapper 클릭 → 자식 device 노드 정보 전달
+      if (node.data('type') === 'device-wrapper') {
+        const child = node.children().filter('[type="device"]').first()
+        if (child.length) {
+          onNodeClick({ id: child.id(), type: 'device', label: child.data('label'), data: child.data() })
+        }
+        return
+      }
+
+      onNodeClick({ id: node.id(), type: node.data('type'), label: node.data('label'), data: node.data() })
     })
 
-    cy.on('tap', (evt) => {
-      if (evt.target === cy) onNodeClick(null)
-    })
+    cy.on('tap', (evt) => { if (evt.target === cy) onNodeClick(null) })
 
     cyRef.current = cy
     return () => { cy.destroy(); cyRef.current = null }
   }, [])
 
+  // topology / myDeviceId / gatewayRoles 변경 처리
   useEffect(() => {
     const cy = cyRef.current
     if (!cy || !topology) return
@@ -259,82 +279,91 @@ export default function NetworkGraph({ topology, myDeviceId, onNodeClick }) {
     const topologyChanged = topologyRef.current !== topology
     topologyRef.current = topology
 
-    cy.elements().remove()
-    cy.add(toElements(topology, myDeviceId))
-
-    // topology가 실제로 바뀐 경우에만 레이아웃 재계산 (내 PC 변경 시 위치 유지)
     if (topologyChanged) {
+      // 전체 재렌더 + 레이아웃 재계산
+      cy.elements().remove()
+      cy.add(toElements(topology, myDeviceId, gatewayRoles))
       cy.layout({
         name: 'cose',
         animate: false,
-        nodeRepulsion: () => 14000,
-        idealEdgeLength: () => 130,
+        nodeRepulsion: () => 18000,
+        idealEdgeLength: () => 150,
         edgeElasticity: () => 0.08,
         gravity: 0.2,
         numIter: 800,
         fit: true,
-        padding: 50,
+        padding: 60,
       }).run()
-    }
-  }, [topology, myDeviceId])
+    } else {
+      // myDeviceId / gatewayRoles 변경: 레이아웃 유지 + 레이블만 갱신
+      for (const node of topology.nodes) {
+        if (node.type !== 'device') continue
+        const hostname = node.data?.hostname || ''
+        const ip       = node.data?.ip_address || ''
+        const isMyDev  = myDeviceId && String(node.data?.id) === String(myDeviceId)
+        const role     = gatewayRoles[ip]
+        const emoji    = DEVICE_EMOJI[node.data?.device_type || 'other'] || '📱'
 
-  function fit()  { cyRef.current?.fit(undefined, 50) }
+        cy.getElementById(node.id)?.data({
+          label: `${emoji}\n${hostname}\n${ip}`,
+          isMyDevice: isMyDev ? 'true' : 'false',
+        })
+        cy.getElementById(`wrap-${node.id}`)?.data({
+          categoryLabel: categoryLabel(isMyDev, role),
+        })
+      }
+    }
+  }, [topology, myDeviceId, gatewayRoles])
+
+  function fit()     { cyRef.current?.fit(undefined, 60) }
   function zoomIn()  { const cy = cyRef.current; cy?.zoom({ level: cy.zoom() * 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }) }
   function zoomOut() { const cy = cyRef.current; cy?.zoom({ level: cy.zoom() / 1.3, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }) }
 
   return (
     <div ref={containerRef} style={{ flex: 1, background: '#0f1117', position: 'relative' }}>
-
-      {/* Zoom controls */}
-      <div style={{
-        position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 4, zIndex: 10,
-      }}>
-        {[['＋', zoomIn], ['－', zoomOut], ['⤢', fit]].map(([label, fn]) => (
-          <button key={label} onClick={fn} style={{
+      {/* 줌 컨트롤 */}
+      <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 4, zIndex: 10 }}>
+        {[['＋', zoomIn], ['－', zoomOut], ['⤢', fit]].map(([lbl, fn]) => (
+          <button key={lbl} onClick={fn} style={{
             width: 32, height: 32, background: '#1e2235', border: '1px solid #2d3148',
-            borderRadius: 6, color: '#94a3b8', fontSize: label === '⤢' ? 16 : 18,
+            borderRadius: 6, color: '#94a3b8', fontSize: lbl === '⤢' ? 16 : 18,
             cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>{label}</button>
+          }}>{lbl}</button>
         ))}
       </div>
-
-      {/* Legend */}
       <Legend />
     </div>
   )
 }
 
+// ── Legend ───────────────────────────────────────────────────────────────────
+
 const LEGEND_ITEMS = [
-  { emoji: '🌐', label: '인터넷 (Internet)', color: '#38bdf8' },
-  { emoji: '🏢', label: '내부 네트워크 (LAN)', color: '#6366f1' },
-  { emoji: '🛡️', label: 'DMZ (공개 구간)', color: '#6366f1' },
-  { emoji: '⚙️', label: '관리 네트워크', color: '#6366f1' },
-  { emoji: '💻', label: 'PC / 워크스테이션', color: '#4361ee' },
-  { emoji: '🖥️', label: '서버', color: '#2d9e6b' },
-  { emoji: '🌐', label: '라우터 / 게이트웨이', color: '#e09c28' },
-  { emoji: '🔥', label: '방화벽 (Firewall)', color: '#dc2626' },
+  { emoji: '🌐', label: '인터넷 (Internet)' },
+  { emoji: '🏢', label: '내부 네트워크 (LAN)' },
+  { emoji: '🛡️', label: 'DMZ (공개 구간)' },
+  { emoji: '💻', label: 'PC / 워크스테이션' },
+  { emoji: '🖥️', label: '서버' },
+  { emoji: '🌐', label: '라우터 / 게이트웨이' },
+  { emoji: '🔥', label: '방화벽 (Firewall)' },
+  { emoji: '📍', label: '내 PC (자동 감지)' },
+  { emoji: '🔀', label: '기본 게이트웨이' },
 ]
 
 function Legend() {
   return (
     <div style={{
       position: 'absolute', bottom: 16, left: 16,
-      background: 'rgba(15,17,23,0.88)',
-      border: '1px solid #2d3148',
-      borderRadius: 10,
-      padding: '10px 14px',
-      fontSize: 12,
-      color: '#94a3b8',
-      pointerEvents: 'none',
-      zIndex: 10,
-      minWidth: 190,
+      background: 'rgba(15,17,23,0.88)', border: '1px solid #2d3148',
+      borderRadius: 10, padding: '10px 14px', fontSize: 12,
+      color: '#94a3b8', pointerEvents: 'none', zIndex: 10, minWidth: 190,
     }}>
       <div style={{ fontWeight: 700, marginBottom: 8, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         범례 (Legend)
       </div>
       {LEGEND_ITEMS.map(({ emoji, label }) => (
         <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
-          <span style={{ fontSize: 15, lineHeight: 1 }}>{emoji}</span>
+          <span style={{ fontSize: 14, lineHeight: 1 }}>{emoji}</span>
           <span style={{ fontSize: 11 }}>{label}</span>
         </div>
       ))}

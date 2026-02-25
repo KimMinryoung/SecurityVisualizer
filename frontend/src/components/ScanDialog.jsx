@@ -11,28 +11,27 @@ const S = {
     padding: 24, width: 560, maxWidth: '95vw', maxHeight: '85vh',
     display: 'flex', flexDirection: 'column', gap: 16,
   },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  title: { fontSize: 16, fontWeight: 700, color: '#e2e8f0' },
-  closeBtn: { background: 'none', border: 'none', color: '#718096', cursor: 'pointer', fontSize: 20 },
   label: { fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 },
   input: {
     width: '100%', padding: '9px 12px', background: '#0f1117',
-    border: '1px solid #2d3148', borderRadius: 7, color: '#e2e8f0',
-    fontSize: 14, fontFamily: 'monospace',
+    border: '1px solid #2d3148', borderRadius: 7, color: '#e2e8f0', fontSize: 14,
   },
   btn: { padding: '9px 18px', borderRadius: 7, border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: 13 },
   row: {
     display: 'flex', alignItems: 'center', gap: 10,
     padding: '8px 10px', borderRadius: 7, marginBottom: 3,
   },
-  scrollBox: { overflowY: 'auto', maxHeight: 280, flex: 1 },
   badge: { fontSize: 11, padding: '2px 8px', borderRadius: 10, fontWeight: 600 },
+  scrollBox: { overflowY: 'auto', maxHeight: 260, flex: 1 },
 }
 
+// phase: 'detecting' | 'scanning' | 'done' | 'error'
+
 export default function ScanDialog({ networks, onImport, onClose }) {
-  const [cidr, setCidr] = useState('')
-  const [scanning, setScanning] = useState(false)
-  const [results, setResults] = useState(null)      // null = 아직 스캔 안 함
+  const [phase, setPhase] = useState('detecting')
+  const [progress, setProgress] = useState({ current: 0, total: 0, cidr: '', adapter: '' })
+  const [scannedCidrs, setScannedCidrs] = useState([])
+  const [results, setResults] = useState([])
   const [selected, setSelected] = useState(new Set())
   const [networkId, setNetworkId] = useState(networks[0]?.id ?? '__new__')
   const [newNetworkName, setNewNetworkName] = useState('')
@@ -40,32 +39,56 @@ export default function ScanDialog({ networks, onImport, onClose }) {
   const [error, setError] = useState('')
   const [importing, setImporting] = useState(false)
 
-  // 접속자 IP로 CIDR 자동 추천
-  useEffect(() => {
-    api.whoami()
-      .then(({ ip }) => {
-        if (!ip || ip.startsWith('127.')) return
-        const parts = ip.split('.')
-        setCidr(`${parts[0]}.${parts[1]}.${parts[2]}.0/24`)
-      })
-      .catch(() => {})
-  }, [])
+  // 다이얼로그가 열리면 즉시 자동 스캔 시작
+  useEffect(() => { runAutoScan() }, [])
 
-  async function handleScan() {
-    if (!cidr.trim()) { setError('CIDR을 입력하세요'); return }
+  async function runAutoScan() {
+    setPhase('detecting')
+    setResults([])
     setError('')
-    setScanning(true)
-    setResults(null)
+
+    let ifaces = []
     try {
-      const data = await api.scanNetwork(cidr.trim())
-      setResults(data)
-      // 신규 장비 자동 선택
-      setSelected(new Set(data.filter(r => !r.already_registered).map(r => r.ip_address)))
+      ifaces = await api.getInterfaces()
     } catch (e) {
-      setError(e.message)
-    } finally {
-      setScanning(false)
+      setError(`인터페이스 감지 실패: ${e.message}`)
+      setPhase('error')
+      return
     }
+
+    if (ifaces.length === 0) {
+      setError('감지된 네트워크 인터페이스가 없습니다.')
+      setPhase('error')
+      return
+    }
+
+    setScannedCidrs(ifaces.map(i => i.cidr))
+    setPhase('scanning')
+
+    const allResults = []
+    const seenHostnames = new Set()
+
+    for (let i = 0; i < ifaces.length; i++) {
+      const { cidr, adapter } = ifaces[i]
+      setProgress({ current: i + 1, total: ifaces.length, cidr, adapter: adapter || '' })
+
+      try {
+        const sub = await api.scanNetwork(cidr)
+        for (const r of sub) {
+          const key = r.hostname.toLowerCase()
+          // 이번 스캔 내 hostname 중복 제거 (다중 어댑터 동일 PC 방지)
+          if (key !== r.ip_address.toLowerCase() && seenHostnames.has(key)) continue
+          seenHostnames.add(key)
+          allResults.push(r)
+        }
+      } catch (_) {
+        // 해당 서브넷 스캔 실패는 무시하고 계속 진행
+      }
+    }
+
+    setResults(allResults)
+    setSelected(new Set(allResults.filter(r => !r.already_registered).map(r => r.ip_address)))
+    setPhase('done')
   }
 
   async function handleImport() {
@@ -76,14 +99,11 @@ export default function ScanDialog({ networks, onImport, onClose }) {
     setError('')
     try {
       let targetNetworkId = networkId
-
-      // 새 네트워크 생성 선택 시
       if (networkId === '__new__') {
-        const name = newNetworkName.trim() || cidr
-        const net = await api.createNetwork({ name, subnet: cidr })
+        const name = newNetworkName.trim() || (scannedCidrs[0] ?? 'My Network')
+        const net = await api.createNetwork({ name, subnet: scannedCidrs[0] ?? '0.0.0.0/0' })
         targetNetworkId = net.id
       }
-
       for (const host of toImport) {
         await api.createDevice({
           hostname: host.hostname,
@@ -103,7 +123,7 @@ export default function ScanDialog({ networks, onImport, onClose }) {
     }
   }
 
-  function toggleSelect(ip) {
+  function toggle(ip) {
     setSelected(prev => {
       const next = new Set(prev)
       if (next.has(ip)) next.delete(ip); else next.add(ip)
@@ -111,97 +131,124 @@ export default function ScanDialog({ networks, onImport, onClose }) {
     })
   }
 
-  const newCount = results?.filter(r => !r.already_registered).length ?? 0
-  const selectedNewCount = results?.filter(r => selected.has(r.ip_address) && !r.already_registered).length ?? 0
+  const newCount = results.filter(r => !r.already_registered).length
+  const selectedNewCount = results.filter(r => selected.has(r.ip_address) && !r.already_registered).length
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={S.modal}>
 
         {/* 헤더 */}
-        <div style={S.header}>
-          <span style={S.title}>🔍 네트워크 스캔</span>
-          <button style={S.closeBtn} onClick={onClose}>×</button>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0' }}>🔍 네트워크 자동 스캔</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#718096', cursor: 'pointer', fontSize: 20 }}>×</button>
         </div>
 
-        {/* CIDR 입력 */}
-        <div>
-          <div style={S.label}>스캔할 서브넷 (CIDR)</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              style={S.input}
-              value={cidr}
-              onChange={e => setCidr(e.target.value)}
-              placeholder="예: 192.168.1.0/24"
-              onKeyDown={e => e.key === 'Enter' && !scanning && handleScan()}
-            />
-            <button
-              style={{ ...S.btn, background: scanning ? '#2d3148' : '#4f5fef', color: '#fff', whiteSpace: 'nowrap' }}
-              onClick={handleScan}
-              disabled={scanning}
-            >
-              {scanning ? '스캔 중…' : '스캔 시작'}
+        {/* 감지 중 */}
+        {phase === 'detecting' && (
+          <div style={{ textAlign: 'center', padding: '32px 0', color: '#64748b' }}>
+            <div style={{ fontSize: 32, marginBottom: 10 }}>📡</div>
+            <div style={{ fontSize: 14 }}>네트워크 인터페이스 감지 중…</div>
+          </div>
+        )}
+
+        {/* 스캔 중 */}
+        {phase === 'scanning' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ textAlign: 'center', padding: '16px 0', color: '#64748b' }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📡</div>
+              <div style={{ fontSize: 14, color: '#94a3b8' }}>
+                {progress.adapter ? `${progress.adapter} ` : ''}스캔 중
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2, fontFamily: 'monospace' }}>
+                {progress.cidr}
+              </div>
+              <div style={{ fontSize: 12, color: '#4a5568', marginTop: 4 }}>
+                {progress.current} / {progress.total} 서브넷
+              </div>
+            </div>
+            {/* 진행 바 */}
+            <div style={{ background: '#0f1117', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 4, background: '#4f5fef',
+                width: `${(progress.current / progress.total) * 100}%`,
+                transition: 'width 0.4s ease',
+              }} />
+            </div>
+            <div style={{ fontSize: 11, color: '#4a5568', textAlign: 'center' }}>
+              감지된 서브넷: {scannedCidrs.join(', ')}
+            </div>
+          </div>
+        )}
+
+        {/* 오류 */}
+        {phase === 'error' && (
+          <div style={{ textAlign: 'center', padding: '20px 0', color: '#fc8181' }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>⚠️</div>
+            <div>{error}</div>
+            <button style={{ ...S.btn, background: '#2d3148', color: '#94a3b8', marginTop: 12 }} onClick={runAutoScan}>
+              다시 시도
             </button>
-          </div>
-          <div style={{ fontSize: 11, color: '#4a5568', marginTop: 5 }}>
-            /24 기준 약 10~30초 소요됩니다
-          </div>
-        </div>
-
-        {/* 스캔 중 스피너 */}
-        {scanning && (
-          <div style={{ textAlign: 'center', padding: '24px 0', color: '#64748b' }}>
-            <div style={{ fontSize: 28, marginBottom: 8 }}>📡</div>
-            <div style={{ fontSize: 13 }}>장비를 탐색하고 있습니다…</div>
           </div>
         )}
 
         {/* 결과 */}
-        {results && !scanning && (
+        {phase === 'done' && (
           <>
+            {/* 스캔 범위 */}
+            <div style={{ fontSize: 12, color: '#4a5568' }}>
+              스캔 범위: <span style={{ color: '#64748b', fontFamily: 'monospace' }}>{scannedCidrs.join(', ')}</span>
+              <button onClick={runAutoScan} style={{ marginLeft: 10, background: 'none', border: 'none', color: '#4f5fef', fontSize: 12, cursor: 'pointer' }}>
+                ↺ 다시 스캔
+              </button>
+            </div>
+
             {/* 요약 */}
-            <div style={{ display: 'flex', gap: 12 }}>
-              <Stat label="발견된 장비" value={results.length} color="#94a3b8" />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Stat label="발견" value={results.length} color="#94a3b8" />
               <Stat label="신규" value={newCount} color="#4ade80" />
-              <Stat label="이미 등록됨" value={results.length - newCount} color="#64748b" />
+              <Stat label="등록됨" value={results.length - newCount} color="#4a5568" />
             </div>
 
             {/* 장비 목록 */}
             <div style={S.scrollBox}>
-              {results.length === 0 && (
+              {results.length === 0 ? (
                 <div style={{ color: '#4a5568', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>
                   응답하는 장비가 없습니다
                 </div>
-              )}
-              {results.map(r => {
+              ) : results.map(r => {
                 const isNew = !r.already_registered
                 const isSel = selected.has(r.ip_address)
                 return (
                   <div
                     key={r.ip_address}
+                    onClick={() => isNew && toggle(r.ip_address)}
                     style={{
                       ...S.row,
                       background: isSel && isNew ? '#1e2a1e' : '#0f1117',
                       border: `1px solid ${isSel && isNew ? '#2d5a2d' : '#1e2235'}`,
-                      opacity: r.already_registered ? 0.5 : 1,
+                      opacity: isNew ? 1 : 0.45,
                       cursor: isNew ? 'pointer' : 'default',
                     }}
-                    onClick={() => isNew && toggleSelect(r.ip_address)}
                   >
                     <input
-                      type="checkbox"
-                      checked={isSel && isNew}
-                      disabled={!isNew}
-                      onChange={() => toggleSelect(r.ip_address)}
+                      type="checkbox" checked={isSel && isNew} disabled={!isNew}
+                      onChange={() => toggle(r.ip_address)}
                       onClick={e => e.stopPropagation()}
-                      style={{ cursor: isNew ? 'pointer' : 'not-allowed' }}
                     />
                     <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#94a3b8', minWidth: 120 }}>
                       {r.ip_address}
                     </span>
-                    <span style={{ flex: 1, fontSize: 13, color: '#e2e8f0' }}>
-                      {r.hostname !== r.ip_address ? r.hostname : '—'}
-                    </span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, color: '#e2e8f0' }}>
+                        {r.hostname !== r.ip_address ? r.hostname : '—'}
+                      </div>
+                      {r.role && (
+                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                          🔀 {r.role}
+                        </div>
+                      )}
+                    </div>
                     {r.mac_address && (
                       <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#4a5568' }}>
                         {r.mac_address}
@@ -219,37 +266,27 @@ export default function ScanDialog({ networks, onImport, onClose }) {
               })}
             </div>
 
-            {/* 가져오기 설정 */}
+            {/* 가져오기 */}
             {newCount > 0 && (
               <div style={{ borderTop: '1px solid #2d3148', paddingTop: 14, display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 150 }}>
                   <div style={S.label}>네트워크 배정</div>
-                  <select
-                    style={{ ...S.input, fontFamily: 'inherit' }}
-                    value={networkId}
-                    onChange={e => setNetworkId(e.target.value)}
-                  >
-                    <option value="__new__">+ 새 네트워크 만들기 ({cidr})</option>
-                    {networks.map(n => (
-                      <option key={n.id} value={n.id}>{n.name} ({n.subnet})</option>
-                    ))}
+                  <select style={{ ...S.input, fontFamily: 'inherit' }} value={networkId} onChange={e => setNetworkId(e.target.value)}>
+                    <option value="__new__">+ 새 네트워크 만들기</option>
+                    {networks.map(n => <option key={n.id} value={n.id}>{n.name} ({n.subnet})</option>)}
                   </select>
                   {networkId === '__new__' && (
                     <input
                       style={{ ...S.input, marginTop: 6, fontFamily: 'inherit' }}
-                      placeholder={`네트워크 이름 (기본값: ${cidr})`}
+                      placeholder="네트워크 이름"
                       value={newNetworkName}
                       onChange={e => setNewNetworkName(e.target.value)}
                     />
                   )}
                 </div>
-                <div style={{ flex: 1, minWidth: 130 }}>
+                <div style={{ flex: 1, minWidth: 120 }}>
                   <div style={S.label}>장비 유형</div>
-                  <select
-                    style={{ ...S.input, fontFamily: 'inherit' }}
-                    value={deviceType}
-                    onChange={e => setDeviceType(e.target.value)}
-                  >
+                  <select style={{ ...S.input, fontFamily: 'inherit' }} value={deviceType} onChange={e => setDeviceType(e.target.value)}>
                     {['workstation', 'server', 'router', 'switch', 'firewall', 'other'].map(t => (
                       <option key={t} value={t}>{t}</option>
                     ))}
@@ -264,10 +301,10 @@ export default function ScanDialog({ networks, onImport, onClose }) {
                 </button>
               </div>
             )}
+
+            {error && <div style={{ color: '#fc8181', fontSize: 13 }}>{error}</div>}
           </>
         )}
-
-        {error && <div style={{ color: '#fc8181', fontSize: 13 }}>{error}</div>}
       </div>
     </div>
   )
@@ -275,7 +312,7 @@ export default function ScanDialog({ networks, onImport, onClose }) {
 
 function Stat({ label, value, color }) {
   return (
-    <div style={{ background: '#0f1117', border: '1px solid #1e2235', borderRadius: 8, padding: '8px 14px', textAlign: 'center' }}>
+    <div style={{ background: '#0f1117', border: '1px solid #1e2235', borderRadius: 8, padding: '8px 14px', textAlign: 'center', flex: 1 }}>
       <div style={{ fontSize: 20, fontWeight: 700, color }}>{value}</div>
       <div style={{ fontSize: 11, color: '#4a5568' }}>{label}</div>
     </div>

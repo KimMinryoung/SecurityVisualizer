@@ -24,6 +24,98 @@ class ScanResult(BaseModel):
     hostname: str
     mac_address: Optional[str] = None
     already_registered: bool = False
+    role: Optional[str] = None   # 예: "Wi-Fi 기본 게이트웨이"
+
+
+class InterfaceInfo(BaseModel):
+    ip: str
+    cidr: str
+    adapter: str = ''
+    gateway: Optional[str] = None
+
+
+def _get_interfaces() -> list:
+    """
+    ipconfig를 파싱해 로컬 IPv4 인터페이스 목록 반환.
+    어댑터 이름, 서브넷 CIDR, 기본 게이트웨이를 함께 추출한다.
+    """
+    try:
+        result = subprocess.run(['ipconfig'], capture_output=True, timeout=10)
+        output = ''
+        for enc in ('utf-8', 'cp949', 'euc-kr'):
+            try:
+                output = result.stdout.decode(enc)
+                break
+            except Exception:
+                continue
+
+        interfaces = []
+
+        # 어댑터별로 섹션을 나눠 파싱
+        current_adapter = ''
+        current_ip = None
+        current_mask = None
+        current_gw = None
+
+        def _flush():
+            nonlocal current_ip, current_mask, current_gw
+            if current_ip and current_mask:
+                try:
+                    net = ipaddress.IPv4Network(f'{current_ip}/{current_mask}', strict=False)
+                    if not net.is_loopback and not net.is_link_local:
+                        interfaces.append({
+                            'ip': current_ip,
+                            'cidr': str(net),
+                            'adapter': current_adapter,
+                            'gateway': current_gw,
+                        })
+                except Exception:
+                    pass
+            current_ip = current_mask = current_gw = None
+
+        for line in output.splitlines():
+            # 어댑터 섹션 헤더: 들여쓰기 없이 ':'로 끝나는 줄
+            if line and not line[0].isspace() and line.strip().endswith(':'):
+                _flush()
+                header = line.strip().rstrip(':')
+                # "이더넷 어댑터 이더넷" → "이더넷"
+                # "Wireless LAN adapter Wi-Fi" → "Wi-Fi"  (대소문자 무관)
+                header_lower = header.lower()
+                for kw in ('어댑터 ', 'adapter '):
+                    if kw in header_lower:
+                        idx = header_lower.index(kw)
+                        current_adapter = header[idx + len(kw):]
+                        break
+                else:
+                    current_adapter = header
+                continue
+
+            ip_m = re.search(r'IPv4[^:]*:\s*([\d.]+)', line)
+            if ip_m:
+                current_ip = ip_m.group(1)
+                continue
+
+            # 서브넷 마스크: 255.로 시작하는 값
+            mask_m = re.search(r':\s*(255\.[\d.]+)\s*$', line.strip())
+            if mask_m and current_ip and not current_mask:
+                current_mask = mask_m.group(1)
+                continue
+
+            # 기본 게이트웨이 (영문·한국어 공통)
+            gw_m = re.search(r'(?:Default Gateway|기본 게이트웨이)[^:]*:\s*([\d.]+)', line)
+            if gw_m:
+                current_gw = gw_m.group(1)
+
+        _flush()
+        return interfaces
+    except Exception:
+        return []
+
+
+@router.get("/interfaces", response_model=List[InterfaceInfo])
+def get_interfaces():
+    """이 서버가 속한 모든 로컬 서브넷과 게이트웨이 정보를 반환"""
+    return _get_interfaces()
 
 
 def _ping(ip: str) -> bool:
@@ -40,19 +132,16 @@ def _ping(ip: str) -> bool:
 def _hostname(ip: str) -> str:
     try:
         name = socket.gethostbyaddr(ip)[0]
-        # 짧은 이름만 사용 (FQDN에서 첫 부분)
         return name.split('.')[0]
     except Exception:
         return ip
 
 
 def _arp_table() -> dict:
-    """시스템 ARP 테이블에서 {ip: mac} 반환"""
     mac_map = {}
     try:
         r = subprocess.run(['arp', '-a'], capture_output=True, text=True, timeout=5)
         for line in r.stdout.splitlines():
-            # Windows: "  192.168.1.1    aa-bb-cc-dd-ee-ff    dynamic"
             m = re.match(r'\s+([\d.]+)\s+([\w-]{17})\s+\w+', line)
             if m:
                 ip = m.group(1)
@@ -74,6 +163,13 @@ def scan_network(payload: ScanRequest, db: Session = Depends(get_db)):
     if len(hosts) > 1024:
         raise HTTPException(status_code=400, detail="서브넷이 너무 큽니다 (최대 /22, 1024개)")
 
+    # {게이트웨이 IP: "어댑터명 기본 게이트웨이"} 맵 구성
+    gateway_roles: dict = {}
+    for iface in _get_interfaces():
+        if iface.get('gateway'):
+            adapter = iface.get('adapter', '')
+            gateway_roles[iface['gateway']] = f"{adapter} 기본 게이트웨이" if adapter else "기본 게이트웨이"
+
     # 병렬 ping sweep
     live: List[str] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=64) as pool:
@@ -86,26 +182,22 @@ def scan_network(payload: ScanRequest, db: Session = Depends(get_db)):
             except Exception:
                 pass
 
-    # ping 후 ARP 테이블 조회 (ping이 ARP를 채움)
     arp = _arp_table()
     existing_devices = db.query(Device).all()
     existing_ips = {d.ip_address for d in existing_devices}
-    # hostname 기준 중복 체크 (같은 PC가 여러 어댑터로 잡히는 경우 방지)
     existing_hostnames = {d.hostname.lower() for d in existing_devices if d.hostname}
 
     results = []
-    seen_hostnames: set = set()  # 이번 스캔 내 중복 제거용
+    seen_hostnames: set = set()
 
     for ip in sorted(live, key=ipaddress.ip_address):
         hostname = _hostname(ip)
         hostname_key = hostname.lower()
 
-        # DB에 같은 IP 또는 같은 hostname이 이미 있으면 등록됨으로 표시
         already = ip in existing_ips or (
             hostname_key != ip.lower() and hostname_key in existing_hostnames
         )
 
-        # 이번 스캔 내에서 같은 hostname이 이미 나왔으면 (다른 어댑터) 건너뜀
         if hostname_key != ip.lower() and hostname_key in seen_hostnames:
             continue
         seen_hostnames.add(hostname_key)
@@ -115,6 +207,7 @@ def scan_network(payload: ScanRequest, db: Session = Depends(get_db)):
             hostname=hostname,
             mac_address=arp.get(ip),
             already_registered=already,
+            role=gateway_roles.get(ip),
         ))
 
     return results

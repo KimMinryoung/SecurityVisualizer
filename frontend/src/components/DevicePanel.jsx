@@ -40,7 +40,7 @@ const STATUS_COLORS = {
   outdated: '#d69e2e',
 }
 
-export default function DevicePanel({ selectedNode, myDeviceId, onSetMyDevice, onDeselect, onRefresh }) {
+export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {}, onSetMyDevice, onDeselect, onRefresh }) {
   const [device, setDevice] = useState(null)
   const [allSolutions, setAllSolutions] = useState([])
   const [loading, setLoading] = useState(false)
@@ -130,6 +130,21 @@ export default function DevicePanel({ selectedNode, myDeviceId, onSetMyDevice, o
           {loading && <div style={S.empty}>Loading…</div>}
           {!loading && device && (
             <>
+              {/* 게이트웨이 역할 배지 */}
+              {gatewayRoles[device.ip_address] && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  background: '#1a2535', border: '1px solid #2d4a6a',
+                  borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+                }}>
+                  <span style={{ fontSize: 18 }}>🔀</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#7dd3fc' }}>게이트웨이</div>
+                    <div style={{ fontSize: 11, color: '#4a7fa5' }}>{gatewayRoles[device.ip_address]}</div>
+                  </div>
+                </div>
+              )}
+
               {/* 내 PC 표식 */}
               {String(device.id) === String(myDeviceId) ? (
                 <div style={{
