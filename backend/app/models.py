@@ -23,6 +23,7 @@ class Device(Base):
     hostname = Column(String, nullable=False)
     ip_address = Column(String, nullable=False)
     mac_address = Column(String, nullable=True)
+    vendor = Column(String, nullable=True)       # MAC OUI 기반 제조사
     os = Column(String, nullable=True)
     device_type = Column(String, nullable=True)  # server, workstation, router, etc.
     status = Column(String, default="active")  # active, inactive, unknown

@@ -4,7 +4,8 @@ from typing import List
 
 from ..database import get_db
 from ..models import Device, Network, DeviceSolution, SecuritySolution
-from ..schemas import DeviceCreate, DeviceOut
+from ..schemas import DeviceCreate, DeviceOut, DevicePatch
+from ..oui import lookup as oui_lookup
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
@@ -40,7 +41,9 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db)):
     network = db.query(Network).filter(Network.id == payload.network_id).first()
     if not network:
         raise HTTPException(status_code=400, detail="Network not found")
-    device = Device(**payload.model_dump())
+    data = payload.model_dump()
+    data["vendor"] = oui_lookup(data.get("mac_address") or "")
+    device = Device(**data)
     db.add(device)
     db.commit()
     db.refresh(device)
@@ -54,6 +57,18 @@ def update_device(device_id: int, payload: DeviceCreate, db: Session = Depends(g
         setattr(device, key, value)
     db.commit()
     db.refresh(device)
+    return _get_device(device_id, db)
+
+
+@router.patch("/{device_id}", response_model=DeviceOut)
+def patch_device(device_id: int, payload: DevicePatch, db: Session = Depends(get_db)):
+    device = _get_device(device_id, db)
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(device, key, value)
+    # MAC이 새로 설정됐거나 기존에 있는데 vendor가 없으면 자동 계산
+    if device.mac_address and not device.vendor:
+        device.vendor = oui_lookup(device.mac_address) or None
+    db.commit()
     return _get_device(device_id, db)
 
 

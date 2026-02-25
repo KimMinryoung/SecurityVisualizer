@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from ..database import get_db
 from ..models import Device
+from ..oui import lookup as oui_lookup
 
 router = APIRouter(prefix="/api/scan", tags=["scan"])
 
@@ -23,6 +24,7 @@ class ScanResult(BaseModel):
     ip_address: str
     hostname: str
     mac_address: Optional[str] = None
+    vendor: Optional[str] = None
     already_registered: bool = False
     role: Optional[str] = None   # 예: "Wi-Fi 기본 게이트웨이"
 
@@ -32,15 +34,16 @@ class InterfaceInfo(BaseModel):
     cidr: str
     adapter: str = ''
     gateway: Optional[str] = None
+    mac: Optional[str] = None
 
 
 def _get_interfaces() -> list:
     """
-    ipconfig를 파싱해 로컬 IPv4 인터페이스 목록 반환.
-    어댑터 이름, 서브넷 CIDR, 기본 게이트웨이를 함께 추출한다.
+    ipconfig /all을 파싱해 로컬 IPv4 인터페이스 목록 반환.
+    어댑터 이름, 서브넷 CIDR, 기본 게이트웨이, MAC 주소를 함께 추출한다.
     """
     try:
-        result = subprocess.run(['ipconfig'], capture_output=True, timeout=10)
+        result = subprocess.run(['ipconfig', '/all'], capture_output=True, timeout=10)
         output = ''
         for enc in ('utf-8', 'cp949', 'euc-kr'):
             try:
@@ -56,9 +59,10 @@ def _get_interfaces() -> list:
         current_ip = None
         current_mask = None
         current_gw = None
+        current_mac = None
 
         def _flush():
-            nonlocal current_ip, current_mask, current_gw
+            nonlocal current_ip, current_mask, current_gw, current_mac
             if current_ip and current_mask:
                 try:
                     net = ipaddress.IPv4Network(f'{current_ip}/{current_mask}', strict=False)
@@ -68,10 +72,11 @@ def _get_interfaces() -> list:
                             'cidr': str(net),
                             'adapter': current_adapter,
                             'gateway': current_gw,
+                            'mac': current_mac,
                         })
                 except Exception:
                     pass
-            current_ip = current_mask = current_gw = None
+            current_ip = current_mask = current_gw = current_mac = None
 
         for line in output.splitlines():
             # 어댑터 섹션 헤더: 들여쓰기 없이 ':'로 끝나는 줄
@@ -88,6 +93,17 @@ def _get_interfaces() -> list:
                         break
                 else:
                     current_adapter = header
+                continue
+
+            # MAC 주소 (Physical Address / 물리적 주소)
+            mac_m = re.search(
+                r'(?:Physical Address|물리적 주소)[^:]*:\s*'
+                r'([0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}'
+                r'[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2}[:-][0-9A-Fa-f]{2})',
+                line
+            )
+            if mac_m and not current_mac:
+                current_mac = mac_m.group(1).upper().replace('-', ':')
                 continue
 
             ip_m = re.search(r'IPv4[^:]*:\s*([\d.]+)', line)
@@ -202,10 +218,12 @@ def scan_network(payload: ScanRequest, db: Session = Depends(get_db)):
             continue
         seen_hostnames.add(hostname_key)
 
+        mac = arp.get(ip)
         results.append(ScanResult(
             ip_address=ip,
             hostname=hostname,
-            mac_address=arp.get(ip),
+            mac_address=mac,
+            vendor=oui_lookup(mac or ""),
             already_registered=already,
             role=gateway_roles.get(ip),
         ))

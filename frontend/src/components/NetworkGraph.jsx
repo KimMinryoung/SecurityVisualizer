@@ -39,6 +39,20 @@ function coverageStatus(solutions = []) {
   return REQUIRED_TYPES.every(t => active.some(s => s.type === t)) ? 'full' : 'partial'
 }
 
+// IP가 CIDR 범위 안에 있는지 확인
+function ipInCidr(ip, cidr) {
+  try {
+    const [net, bits] = cidr.split('/')
+    const prefix = parseInt(bits)
+    if (isNaN(prefix)) return false
+    const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0
+    const toInt = s => s.split('.').reduce((a, o) => ((a << 8) | parseInt(o, 10)) >>> 0, 0)
+    return (toInt(ip) & mask) === (toInt(net) & mask)
+  } catch {
+    return false
+  }
+}
+
 function networkEmoji(name = '') {
   const n = name.toLowerCase()
   if (n.includes('dmz'))                               return '🛡️'
@@ -168,12 +182,23 @@ function buildStylesheet() {
         opacity: 0.5,
       },
     },
+    {
+      selector: 'edge[type="membership-offline"]',
+      style: {
+        width: 1.5,
+        'line-color': '#475569',
+        'line-style': 'dashed',
+        'line-dash-pattern': [5, 5],
+        'curve-style': 'bezier',
+        opacity: 0.25,
+      },
+    },
   ]
 }
 
 // ── Element builder ──────────────────────────────────────────────────────────
 
-function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode) {
+function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, activeCidrs = []) {
   const elements = []
 
   // Internet (synthetic)
@@ -245,10 +270,13 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode) 
     })
   }
 
-  // Membership edges (device → network)
+  // Membership edges (device → network) — activeCidrs 기반으로 온/오프라인 구분
   for (const edge of topology.edges) {
+    const devNode = topology.nodes.find(n => n.id === edge.source && n.type === 'device')
+    const ip = devNode?.data?.ip_address || ''
+    const online = activeCidrs.length === 0 || activeCidrs.some(c => ipInCidr(ip, c))
     elements.push({
-      data: { id: edge.id, source: edge.source, target: edge.target, type: 'membership' },
+      data: { id: edge.id, source: edge.source, target: edge.target, type: online ? 'membership' : 'membership-offline' },
     })
   }
 
@@ -257,7 +285,7 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode) 
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, onNodeClick, coverageMode = false, filterTypes = new Set(), vulnMode = false, vulnSeverityFilter = new Set() }) {
+export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, activeCidrs = [], onNodeClick, coverageMode = false, filterTypes = new Set(), vulnMode = false, vulnSeverityFilter = new Set() }) {
   const containerRef = useRef(null)
   const cyRef = useRef(null)
   const topologyRef = useRef(null)
@@ -298,7 +326,7 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
     return () => { cy.destroy(); cyRef.current = null }
   }, [])
 
-  // topology / myDeviceId / gatewayRoles 변경 처리
+  // topology / myDeviceId / gatewayRoles / activeCidrs 변경 처리
   useEffect(() => {
     const cy = cyRef.current
     if (!cy || !topology) return
@@ -309,7 +337,7 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
     if (topologyChanged) {
       // 전체 재렌더 + 레이아웃 재계산
       cy.elements().remove()
-      cy.add(toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode))
+      cy.add(toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, activeCidrs))
       cy.layout({
         name: 'cose',
         animate: false,
@@ -322,7 +350,14 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
         padding: 60,
       }).run()
     } else {
-      // myDeviceId / gatewayRoles 변경: 레이아웃 유지 + 레이블만 갱신
+      // 레이아웃 유지 — 엣지 온/오프라인 타입 갱신
+      for (const edge of topology.edges) {
+        const devNode = topology.nodes.find(n => n.id === edge.source && n.type === 'device')
+        const ip = devNode?.data?.ip_address || ''
+        const online = activeCidrs.length === 0 || activeCidrs.some(c => ipInCidr(ip, c))
+        cy.getElementById(edge.id)?.data('type', online ? 'membership' : 'membership-offline')
+      }
+      // 레이블 갱신 (myDeviceId / gatewayRoles 변경 대응)
       for (const node of topology.nodes) {
         if (node.type !== 'device') continue
         const hostname = node.data?.hostname || ''
@@ -340,7 +375,7 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
         })
       }
     }
-  }, [topology, myDeviceId, gatewayRoles])
+  }, [topology, myDeviceId, gatewayRoles, activeCidrs])
 
   // 색상 + dim 필터 (coverageMode, filterTypes, vulnMode, vulnSeverityFilter, topology 변경 시)
   useEffect(() => {
@@ -431,6 +466,12 @@ function Legend({ coverageMode, vulnMode }) {
     }}>
       <div style={{ fontWeight: 700, marginBottom: 8, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         범례 (Legend)
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #1e2235' }}>
+        <svg width="28" height="8" style={{ flexShrink: 0 }}>
+          <line x1="0" y1="4" x2="28" y2="4" stroke="#475569" strokeWidth="1.5" strokeDasharray="5,5" />
+        </svg>
+        <span style={{ fontSize: 11 }}>미연결 (현재 서브넷 외)</span>
       </div>
       {coverageMode ? (
         COVERAGE_LEGEND.map(({ dot, label }) => (

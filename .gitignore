@@ -60,3 +60,8 @@ Thumbs.db
 *.tmp
 *.temp
 .claude/
+
+# Debug artifacts
+debug/
+*.png
+*.jpg

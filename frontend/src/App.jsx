@@ -12,6 +12,7 @@ export default function App() {
   const [myDeviceId, setMyDeviceId] = useState(() => localStorage.getItem('myDeviceId'))
   // {ip: "Wi-Fi 기본 게이트웨이"} — 인터페이스 정보로부터 도출
   const [gatewayRoles, setGatewayRoles] = useState({})
+  const [activeCidrs, setActiveCidrs] = useState([])
   const [coverageMode, setCoverageMode] = useState(false)
   const [filterTypes, setFilterTypes] = useState(new Set())
   const [vulnMode, setVulnMode] = useState(false)
@@ -41,26 +42,41 @@ export default function App() {
     api.getInterfaces()
       .then(ifaces => {
         const roles = {}
+        const cidrs = []
         for (const iface of ifaces) {
           if (iface.gateway) {
             const name = iface.adapter ? `${iface.adapter} 기본 게이트웨이` : '기본 게이트웨이'
             roles[iface.gateway] = name
           }
+          if (iface.cidr) cidrs.push(iface.cidr)
         }
         setGatewayRoles(roles)
+        setActiveCidrs(cidrs)
       })
       .catch(() => {})
   }, [])
 
-  // topology 로드 후 접속자 IP로 내 PC 자동 감지
+  // topology 로드 후 접속자 IP로 내 PC 자동 감지 + OS 자동 채움
   useEffect(() => {
     if (!topology) return
     api.whoami()
-      .then(({ ip }) => {
+      .then(({ ip, local_ips = [], os }) => {
+        // HTTP 클라이언트 IP(127.0.0.1 등)와 실제 인터페이스 IP 모두 시도
+        const candidates = new Set([ip, ...local_ips])
         const match = topology.nodes.find(
-          n => n.type === 'device' && n.data?.ip_address === ip
+          n => n.type === 'device' && candidates.has(n.data?.ip_address)
         )
-        if (match) handleSetMyDevice(match.data.id)
+        if (!match) return
+        handleSetMyDevice(match.data.id)
+        // OS·MAC 미입력 장비에 로컬 정보 자동 기입 (backend가 vendor 자동 계산)
+        const patch = {}
+        if (!match.data.os && os) patch.os = os
+        if (!match.data.mac_address && local_macs?.[match.data.ip_address]) {
+          patch.mac_address = local_macs[match.data.ip_address]
+        }
+        if (Object.keys(patch).length > 0) {
+          api.patchDevice(match.data.id, patch).then(loadData).catch(() => {})
+        }
       })
       .catch(() => {})
   }, [topology])
@@ -95,6 +111,7 @@ export default function App() {
           topology={topology}
           myDeviceId={myDeviceId}
           gatewayRoles={gatewayRoles}
+          activeCidrs={activeCidrs}
           onNodeClick={setSelectedNode}
           coverageMode={coverageMode}
           filterTypes={filterTypes}

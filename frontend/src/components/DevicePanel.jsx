@@ -54,12 +54,16 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
   const [showAddVuln, setShowAddVuln] = useState(false)
   const [newVuln, setNewVuln] = useState({ cve_id: '', title: '', severity: 'medium', description: '' })
   const [vulnError, setVulnError] = useState('')
+  const [autoscanLoading, setAutoscanLoading] = useState(false)
+  const [autoscanMsg, setAutoscanMsg] = useState('')
 
   useEffect(() => {
     setConfirmDelete(false)
     setVulns([])
     setShowAddVuln(false)
     setVulnError('')
+    setAutoscanLoading(false)
+    setAutoscanMsg('')
     if (selectedNode?.type !== 'device') { setDevice(null); return }
     const devId = selectedNode.data.deviceId
     setLoading(true)
@@ -110,6 +114,25 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
       onRefresh()
     } catch (e) {
       setVulnError(e.message)
+    }
+  }
+
+  async function handleAutoscan() {
+    setAutoscanLoading(true)
+    setAutoscanMsg('')
+    try {
+      const result = await api.autoscanVulns(device.id)
+      if (result.added > 0) {
+        setAutoscanMsg(`✅ ${result.added}개 취약점이 추가되었습니다`)
+      } else {
+        setAutoscanMsg(`이미 최신 상태입니다 (${result.skipped}개 스킵)`)
+      }
+      await loadVulns(device.id)
+      onRefresh()
+    } catch (e) {
+      setAutoscanMsg(`오류: ${e.message}`)
+    } finally {
+      setAutoscanLoading(false)
     }
   }
 
@@ -252,6 +275,7 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
               <InfoRow label="Hostname" value={device.hostname} />
               <InfoRow label="IP Address" value={device.ip_address} />
               <InfoRow label="MAC" value={device.mac_address || '—'} />
+              <InfoRow label="Vendor" value={device.vendor || '—'} />
               <InfoRow label="OS" value={device.os || '—'} />
               <InfoRow label="Type" value={device.device_type || '—'} />
               <InfoRow label="Status">
@@ -350,6 +374,34 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
               {/* Vulnerabilities */}
               <div style={S.section}>
                 <div style={S.sectionTitle}>Vulnerabilities</div>
+
+                {/* OS 기반 자동 스캔 버튼 */}
+                <div style={{ marginBottom: 10 }}>
+                  <button
+                    onClick={handleAutoscan}
+                    disabled={!device.os || autoscanLoading}
+                    title={!device.os ? 'OS 정보 없음' : 'OS 정보를 기반으로 알려진 CVE를 자동 등록합니다'}
+                    style={{
+                      width: '100%', padding: '6px 0',
+                      background: device.os ? '#1e2a3a' : '#1a1d27',
+                      border: `1px solid ${device.os ? '#2d4a6a' : '#2d3148'}`,
+                      borderRadius: 6, color: device.os ? '#7dd3fc' : '#3a4055',
+                      fontSize: 12, cursor: device.os ? 'pointer' : 'not-allowed',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                    }}
+                  >
+                    {autoscanLoading ? '⏳ 스캔 중…' : '🔍 OS 기반 자동 스캔'}
+                  </button>
+                  {autoscanMsg && (
+                    <div style={{
+                      marginTop: 5, fontSize: 11, textAlign: 'center',
+                      color: autoscanMsg.startsWith('✅') ? '#4ade80' : '#94a3b8',
+                    }}>
+                      {autoscanMsg}
+                    </div>
+                  )}
+                </div>
+
                 {vulns.length === 0 && (
                   <div style={{ color: '#4a5568', fontSize: '12px' }}>취약점 없음</div>
                 )}

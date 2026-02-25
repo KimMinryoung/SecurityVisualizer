@@ -89,6 +89,12 @@ class DeviceSolutionOut(BaseModel):
 
 # --- Device ---
 
+class DevicePatch(BaseModel):
+    os: Optional[str] = None
+    mac_address: Optional[str] = None
+    vendor: Optional[str] = None
+
+
 class DeviceCreate(BaseModel):
     hostname: str
     ip_address: str
@@ -104,6 +110,7 @@ class DeviceOut(BaseModel):
     hostname: str
     ip_address: str
     mac_address: Optional[str]
+    vendor: Optional[str]
     os: Optional[str]
     device_type: Optional[str]
     status: str

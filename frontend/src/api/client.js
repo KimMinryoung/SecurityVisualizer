@@ -31,6 +31,7 @@ export const api = {
   listDevices: () => req('GET', '/api/devices/'),
   getDevice: (id) => req('GET', `/api/devices/${id}`),
   createDevice: (data) => req('POST', '/api/devices/', data),
+  patchDevice:  (id, data) => req('PATCH', `/api/devices/${id}`, data),
   deleteDevice: (id) => req('DELETE', `/api/devices/${id}`),
 
   // Solutions catalog
@@ -46,9 +47,13 @@ export const api = {
   assignSolution: (deviceId, data) => req('POST', `/api/devices/${deviceId}/solutions`, data),
   unassignSolution: (deviceId, assignmentId) => req('DELETE', `/api/devices/${deviceId}/solutions/${assignmentId}`),
 
+  // Router import
+  fetchRouterClients: (password, url) => req('POST', '/api/router/clients', { password, url }),
+
   // Device vulnerabilities
   listDeviceVulns:  (deviceId) => req('GET',    `/api/devices/${deviceId}/vulnerabilities`),
   addVuln:          (deviceId, data) => req('POST',   `/api/devices/${deviceId}/vulnerabilities`, data),
+  autoscanVulns:    (deviceId) => req('POST',   `/api/devices/${deviceId}/vulnerabilities/autoscan`),
   updateVulnStatus: (deviceId, vid, data) => req('PATCH',  `/api/devices/${deviceId}/vulnerabilities/${vid}`, data),
   deleteVuln:       (deviceId, vid) => req('DELETE', `/api/devices/${deviceId}/vulnerabilities/${vid}`),
 }
