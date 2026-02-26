@@ -15,7 +15,7 @@ from .routers.bluetooth import router as bluetooth_router
 
 models.Base.metadata.create_all(bind=engine)
 
-# 기존 DB에 신규 컬럼 추가 + 기존 장비 vendor 역채움
+# 기존 DB 에 신규 컬럼 추가 + 기존 장비 vendor 역채움 + 네트워크 중복 제거
 def _migrate():
     from .database import SessionLocal
     from .oui import lookup as oui_lookup
@@ -37,6 +37,43 @@ def _migrate():
                 db.execute(sqlalchemy.text(
                     "UPDATE devices SET vendor = :v WHERE id = :id"
                 ), {"v": v, "id": row[0]})
+        db.commit()
+    except Exception:
+        pass
+    
+    # 네트워크 중복 제거: 서브넷이 중복인 경우 하나만 남기고 삭제
+    try:
+        duplicates = db.execute(sqlalchemy.text(
+            "SELECT subnet, COUNT(*) as cnt FROM networks GROUP BY subnet HAVING cnt > 1"
+        )).fetchall()
+        for dup in duplicates:
+            subnet = dup[0]
+            nets = db.execute(
+                sqlalchemy.text("SELECT id FROM networks WHERE subnet = :subnet"),
+                {"subnet": subnet}
+            ).fetchall()
+            for net_id in nets[1:]:
+                devices_in_net = db.execute(
+                    sqlalchemy.text("SELECT id FROM devices WHERE network_id = :nid"),
+                    {"nid": net_id[0]}
+                ).fetchall()
+                target_net_id = nets[0][0]
+                for dev in devices_in_net:
+                    db.execute(
+                        sqlalchemy.text("UPDATE devices SET network_id = :tid WHERE id = :did"),
+                        {"tid": target_net_id, "did": dev[0]}
+                    )
+                db.execute(
+                    sqlalchemy.text("DELETE FROM networks WHERE id = :nid"),
+                    {"nid": net_id[0]}
+                )
+            db.commit()
+    except Exception:
+        pass
+    
+    # 서브넷 유니크 인덱스 추가
+    try:
+        db.execute(sqlalchemy.text("CREATE UNIQUE INDEX IF NOT EXISTS uq_networks_subnet ON networks (subnet)"))
         db.commit()
     except Exception:
         pass
@@ -68,16 +105,13 @@ app.include_router(bluetooth_router)
 
 def _local_os() -> str:
     """로컬 머신 OS 문자열 반환. 자동 스캔 룰셋 매칭용."""
-    system = platform.system()  # "Windows", "Linux", "Darwin"
+    system = platform.system()
     if system == "Windows":
-        # platform.release()는 Win11에서도 "10"을 반환하는 Python 버그가 있으므로
-        # 빌드 번호로 직접 구분
         build = sys.getwindowsversion().build if hasattr(sys, "getwindowsversion") else 0
         release = "11" if build >= 22000 else platform.release()
         return f"Windows {release}"
     if system == "Darwin":
         return f"macOS {platform.mac_ver()[0]}"
-    # Linux: /etc/os-release 에서 NAME 읽기 시도
     try:
         with open("/etc/os-release") as f:
             for line in f:

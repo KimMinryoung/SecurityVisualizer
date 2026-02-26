@@ -48,7 +48,7 @@ function coverageStatus(solutions = []) {
   return REQUIRED_TYPES.every(t => active.some(s => s.type === t)) ? 'full' : 'partial'
 }
 
-// IP가 CIDR 범위 안에 있는지 확인
+// IP 가 CIDR 범위 안에 있는지 확인
 function ipInCidr(ip, cidr) {
   try {
     const [net, bits] = cidr.split('/')
@@ -131,23 +131,23 @@ function buildStylesheet() {
         height: 55,
       },
     },
-    // Network
+    // Network - 타입에 따라 동적 스타일
     {
       selector: 'node[type="network"]',
       style: {
-        'background-color': '#1e2235',
-        'border-color': '#6366f1',
-        'border-width': 2,
+        'background-color': 'data(bgColor)',
+        'border-color': 'data(borderColor)',
+        'border-width': 'data(borderWidth)',
         label: 'data(label)',
         'text-valign': 'center',
         'text-halign': 'center',
         'font-size': '12px',
         color: '#a5b4fc',
         'text-wrap': 'wrap',
-        'text-max-width': '200px',
+        'text-max-width': '220px',
         shape: 'roundrectangle',
-        width: 200,
-        height: 72,
+        width: 240,
+        height: 90,
       },
     },
     // Device circle: hostname + IP 안에 표시
@@ -216,6 +216,21 @@ function buildStylesheet() {
         opacity: 0.85,
       },
     },
+    // 이 PC → 게이트웨이 라우팅 경로 (흐름 강조)
+    {
+      selector: 'edge[type="pc-to-gw"]',
+      style: {
+        width: 3,
+        'line-color': '#22c55e',
+        'curve-style': 'bezier',
+        'target-arrow-shape': 'triangle',
+        'target-arrow-color': '#22c55e',
+        'arrow-scale': 1.4,
+        opacity: 0.95,
+        'line-dash-pattern': [8, 4],
+        'line-style': 'dashed',
+      },
+    },
     // 블루투스 연결 (활성)
     {
       selector: 'edge[type="bluetooth"]',
@@ -255,20 +270,68 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
     topology.nodes.filter(n => n.type === 'device').map(n => n.data?.ip_address)
   )
 
+  // 내 PC 찾기
+  let myDeviceNode = null
+  if (myDeviceId) {
+    myDeviceNode = topology.nodes.find(
+      n => n.type === 'device' && String(n.data?.id) === String(myDeviceId)
+    )
+  }
+  const myDeviceIp = myDeviceNode?.data?.ip_address || ''
+  const myDeviceMac = myDeviceNode?.data?.mac_address || ''
+
   // Network nodes + internet edges
   for (const node of topology.nodes) {
     if (node.type !== 'network') continue
     const emoji = networkEmoji(node.data?.name)
     const isBtNet = (node.data?.subnet || '') === 'bluetooth'
-    const netDesc = isBtNet ? '(이 PC에 페어링된 장치들)' : '(같은 공유기에 연결된 장치들)'
+    const netDesc = isBtNet ? '(이 PC 에 페어링된 장치들)' : '(같은 공유기에 연결된 장치들)'
+    
+    // 네트워크 타입에 따른 스타일
+    const networkType = node.data?.network_type || 'scanned'
+    const status = node.data?.status || 'inactive'
+    
+    let bgColor = '#1e2235'
+    let borderColor = '#6366f1'
+    let borderWidth = 2
+    let typeBadge = ''
+
+    if (networkType === 'main') {
+      bgColor = '#064e3b'
+      borderColor = '#10b981'
+      borderWidth = 3
+      typeBadge = '\n[주 네트워크]'
+    } else if (networkType === 'vmware') {
+      bgColor = '#1e3a5f'
+      borderColor = '#3b82f6'
+      borderWidth = 2
+      typeBadge = '\n[VMware 가상]'
+    } else if (networkType === 'bluetooth') {
+      bgColor = '#312e81'
+      borderColor = '#818cf8'
+      borderWidth = 2
+      typeBadge = status === 'active' ? '\n[블루투스 연결됨]' : '\n[블루투스 비활성]'
+    } else if (status === 'inactive') {
+      bgColor = '#2d1f1f'
+      borderColor = '#78716c'
+      borderWidth = 1
+      typeBadge = '\n[이전 연결]'
+    }
+    
     elements.push({
       data: {
         ...node.data,
         id: node.id,
-        label: `${emoji} ${node.data?.name || node.label}\n${isBtNet ? '' : (node.data?.subnet || '')}\n${netDesc}`,
+        label: `${emoji} ${node.data?.name || node.label}\n${isBtNet ? '' : (node.data?.subnet || '')}\n${netDesc}${typeBadge}`,
         type: 'network',
+        bgColor: bgColor,
+        borderColor: borderColor,
+        borderWidth: borderWidth,
       },
     })
+    // 블루투스 네트워크는 Internet 과 연결되지 않음
+    if (node.data?.subnet === 'bluetooth') continue
+
     // 이 네트워크 서브넷에 해당하는 게이트웨이가 있으면 직접 연결 생략
     const subnet = node.data?.subnet || ''
     const hasGwForSubnet = [...gwIps].some(ip => subnet && ipInCidr(ip, subnet))
@@ -327,7 +390,7 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
     const isMyDev  = myDeviceId && String(node.data?.id) === String(myDeviceId)
     const role     = gatewayRoles[ip]
 
-    // 투명 wrapper (카테고리 텍스트는 wrapper의 top에 표시)
+    // 투명 wrapper (카테고리 텍스트는 wrapper 의 top 에 표시)
     elements.push({
       data: {
         id: `wrap-${node.id}`,
@@ -336,7 +399,7 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
       },
     })
 
-    // 장비 원 (hostname + IP를 원 안에 표시, BT 장비는 MAC 표시)
+    // 장비 원 (hostname + IP 를 원 안에 표시, BT 장비는 MAC 표시)
     const isBt = ip.startsWith('bt:')
     const displayLine3 = isBt ? (node.data?.mac_address || 'Bluetooth') : ip
     elements.push({
@@ -381,6 +444,49 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
           type: 'gateway',
         },
       })
+    }
+  }
+
+  // 이 PC → 게이트웨이 엣지 (네트워크 흐름 가시화)
+  if (myDeviceNode && myDeviceIp) {
+    // 내 PC 의 서브넷과 일치하는 게이트웨이 찾기
+    for (const netNode of topology.nodes) {
+      if (netNode.type !== 'network') continue
+      const subnet = netNode.data?.subnet || ''
+      if (subnet && ipInCidr(myDeviceIp, subnet)) {
+        // 이 서브넷의 게이트웨이 찾기
+        for (const [gwIp, role] of Object.entries(gatewayRoles)) {
+          if (ipInCidr(gwIp, subnet)) {
+            // 게이트웨이가 등록된 장비인지 확인
+            const gwNode = topology.nodes.find(
+              n => n.type === 'device' && n.data?.ip_address === gwIp
+            )
+            if (gwNode) {
+              // 등록된 게이트웨이 장비로 연결
+              elements.push({
+                data: {
+                  id: `e-pc-gw-${myDeviceNode.id}`,
+                  source: myDeviceNode.id,
+                  target: gwNode.id,
+                  type: 'pc-to-gw',
+                },
+              })
+            } else {
+              // 미등록 게이트웨이 (가상 노드) 로 연결
+              const synId = `syn-gw-${gwIp.replace(/\./g, '-')}`
+              elements.push({
+                data: {
+                  id: `e-pc-gw-${myDeviceNode.id}`,
+                  source: myDeviceNode.id,
+                  target: synId,
+                  type: 'pc-to-gw',
+                },
+              })
+            }
+            break
+          }
+        }
+      }
     }
   }
 
@@ -569,8 +675,10 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
 
 const LEGEND_ITEMS = [
   { emoji: '🌐', label: '인터넷 (Internet)' },
-  { emoji: '🏢', label: '내부 네트워크 (LAN)' },
-  { emoji: '🛡️', label: 'DMZ (공개 구간)' },
+  { emoji: '🟢', label: '주 네트워크 (활성)' },
+  { emoji: '🔵', label: 'VMware 가상 네트워크' },
+  { emoji: '📶', label: '블루투스 네트워크' },
+  { emoji: '⚫', label: '이전 연결 네트워크' },
   { emoji: '💻', label: 'PC / 워크스테이션' },
   { emoji: '🖥️', label: '서버' },
   { emoji: '🌐', label: '라우터 / 게이트웨이' },
@@ -599,17 +707,24 @@ function Legend({ coverageMode, vulnMode }) {
       position: 'absolute', bottom: 16, left: 16,
       background: 'rgba(15,17,23,0.88)', border: '1px solid #2d3148',
       borderRadius: 10, padding: '10px 14px', fontSize: 12,
-      color: '#94a3b8', pointerEvents: 'none', zIndex: 10, minWidth: 190,
+      color: '#94a3b8', pointerEvents: 'none', zIndex: 10, minWidth: 200,
     }}>
       <div style={{ fontWeight: 700, marginBottom: 8, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         범례 (Legend)
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
         <svg width="28" height="8" style={{ flexShrink: 0 }}>
+          <line x1="0" y1="4" x2="22" y2="4" stroke="#22c55e" strokeWidth="3" strokeDasharray="8,4" />
+          <polygon points="22,0 28,4 22,8" fill="#22c55e" />
+        </svg>
+        <span style={{ fontSize: 11 }}>내 PC → 게이트웨이 (인터넷 경로)</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+        <svg width="28" height="8" style={{ flexShrink: 0 }}>
           <line x1="0" y1="4" x2="22" y2="4" stroke="#f59e0b" strokeWidth="2.5" />
           <polygon points="22,0 28,4 22,8" fill="#f59e0b" />
         </svg>
-        <span style={{ fontSize: 11 }}>인터넷 경로 (게이트웨이 경유)</span>
+        <span style={{ fontSize: 11 }}>게이트웨이 → 인터넷</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
         <svg width="28" height="8" style={{ flexShrink: 0 }}>

@@ -45,6 +45,12 @@ class NetworkOut(BaseModel):
     vlan_id: Optional[int]
     gateway: Optional[str]
     description: Optional[str]
+    # 네트워크 타입: "main" (주 네트워크), "vmware" (VMware 가상), "scanned" (스캔 이력)
+    network_type: str = "scanned"
+    # 상태: "active" (현재 연결됨), "virtual" (가상), "inactive" (비활성)
+    status: str = "inactive"
+    # 어댑터 이름 (있는 경우)
+    adapter: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -93,6 +99,7 @@ class DevicePatch(BaseModel):
     os: Optional[str] = None
     mac_address: Optional[str] = None
     vendor: Optional[str] = None
+    network_id: Optional[int] = None
 
 
 class DeviceCreate(BaseModel):
@@ -130,6 +137,10 @@ class TopologyNode(BaseModel):
     data: dict = {}
 
 
+class TopologyMeta(BaseModel):
+    this_pc_device_id: Optional[int] = None  # 백엔드 서버가 돌아가는 PC의 device id
+
+
 class TopologyEdge(BaseModel):
     id: str
     source: str
@@ -139,3 +150,4 @@ class TopologyEdge(BaseModel):
 class TopologyOut(BaseModel):
     nodes: List[TopologyNode]
     edges: List[TopologyEdge]
+    meta: Optional[TopologyMeta] = None

@@ -215,6 +215,38 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
 
       {selectedNode?.type === 'network' && (
         <div style={S.body}>
+          {/* 네트워크 타입 배지 */}
+          {selectedNode.data?.network_type && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: selectedNode.data.network_type === 'main' ? '#064e3b' :
+                          selectedNode.data.network_type === 'vmware' ? '#1e3a5f' :
+                          selectedNode.data.network_type === 'bluetooth' ? '#312e81' : '#2d1f1f',
+              border: `1px solid ${
+                selectedNode.data.network_type === 'main' ? '#10b981' :
+                selectedNode.data.network_type === 'vmware' ? '#3b82f6' :
+                selectedNode.data.network_type === 'bluetooth' ? '#818cf8' : '#78716c'
+              }`,
+              borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+            }}>
+              <span style={{ fontSize: 18 }}>
+                {selectedNode.data.network_type === 'main' ? '🟢' :
+                 selectedNode.data.network_type === 'vmware' ? '🔵' :
+                 selectedNode.data.network_type === 'bluetooth' ? '📶' : '⚫'}
+              </span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#a5b4fc' }}>
+                  {selectedNode.data.network_type === 'main' ? '주 네트워크 (Internet 연결)' :
+                   selectedNode.data.network_type === 'vmware' ? 'VMware 가상 네트워크' :
+                   selectedNode.data.network_type === 'bluetooth' ? '블루투스 네트워크' : '이전 연결 네트워크'}
+                </div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>
+                  {selectedNode.data.adapter ? `${selectedNode.data.adapter}` :
+                   selectedNode.data.status === 'active' ? '현재 연결됨' : '연결 없음'}
+                </div>
+              </div>
+            </div>
+          )}
           <InfoRow label="Name" value={selectedNode.data.name} />
           <InfoRow label="Subnet" value={selectedNode.data.subnet} />
           <InfoRow label="Gateway" value={selectedNode.data.gateway || '—'} />
@@ -228,6 +260,39 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
           {loading && <div style={S.empty}>Loading…</div>}
           {!loading && device && (
             <>
+              {/* 네트워크 타입 배지 */}
+              {selectedNode.data?.network_type && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  background: selectedNode.data.network_type === 'main' ? '#064e3b' :
+                              selectedNode.data.network_type === 'vmware' ? '#1e3a5f' :
+                              selectedNode.data.network_type === 'bluetooth' ? '#312e81' : '#2d1f1f',
+                  border: `1px solid ${
+                    selectedNode.data.network_type === 'main' ? '#10b981' :
+                    selectedNode.data.network_type === 'vmware' ? '#3b82f6' :
+                    selectedNode.data.network_type === 'bluetooth' ? '#818cf8' : '#78716c'
+                  }`,
+                  borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+                }}>
+                  <span style={{ fontSize: 18 }}>
+                    {selectedNode.data.network_type === 'main' ? '🟢' :
+                     selectedNode.data.network_type === 'vmware' ? '🔵' :
+                     selectedNode.data.network_type === 'bluetooth' ? '📶' : '⚫'}
+                  </span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#a5b4fc' }}>
+                      {selectedNode.data.network_type === 'main' ? '주 네트워크' :
+                       selectedNode.data.network_type === 'vmware' ? 'VMware 가상 네트워크' :
+                       selectedNode.data.network_type === 'bluetooth' ? '블루투스 네트워크' : '이전 연결 네트워크'}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>
+                      {selectedNode.data.adapter ? `${selectedNode.data.adapter}` :
+                       selectedNode.data.status === 'active' ? '현재 연결됨' : '연결 없음'}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* 게이트웨이 역할 배지 */}
               {gatewayRoles[device.ip_address] && (
                 <div style={{

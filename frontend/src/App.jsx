@@ -9,6 +9,7 @@ export default function App() {
   const [networks, setNetworks] = useState([])
   const [selectedNode, setSelectedNode] = useState(null)
   const [error, setError] = useState('')
+  // topology.meta.this_pc_device_id 우선, 없으면 localStorage 폴백
   const [myDeviceId, setMyDeviceId] = useState(() => localStorage.getItem('myDeviceId'))
   // {ip: "Wi-Fi 기본 게이트웨이"} — 인터페이스 정보로부터 도출
   const [gatewayRoles, setGatewayRoles] = useState({})
@@ -26,11 +27,15 @@ export default function App() {
 
   const loadData = useCallback(async () => {
     try {
-      // BT 장비 status를 현재 연결 상태로 갱신한 뒤 topology 조회
+      // BT 장비 status 를 현재 연결 상태로 갱신한 뒤 topology 조회
       await api.refreshBtStatus().catch(() => {})
       const [topo, nets] = await Promise.all([api.getTopology(), api.listNetworks()])
       setTopology(topo)
       setNetworks(nets)
+      // topology.meta.this_pc_device_id 가 있으면 우선 사용
+      if (topo.meta?.this_pc_device_id) {
+        handleSetMyDevice(topo.meta.this_pc_device_id)
+      }
       setError('')
     } catch (e) {
       setError(`Failed to connect to backend: ${e.message}`)
@@ -58,12 +63,13 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  // topology 로드 후 접속자 IP/MAC으로 내 PC 자동 감지 + OS 자동 채움
+  // topology 로드 후 접속자 IP/MAC 으로 내 PC 자동 감지 + OS 자동 채움
+  // (topology.meta.this_pc_device_id 가 없으면 폴백으로 사용)
   useEffect(() => {
-    if (!topology) return
+    if (!topology || topology.meta?.this_pc_device_id) return
     api.whoami()
       .then(({ ip, local_ips = [], local_macs = {}, os }) => {
-        // HTTP 클라이언트 IP(127.0.0.1 등)와 실제 인터페이스 IP 모두 시도
+        // HTTP 클라이언트 IP(127.0.0.1 등) 와 실제 인터페이스 IP 모두 시도
         const candidates = new Set([ip, ...local_ips])
         const localMacSet = new Set(
           Object.values(local_macs).map(m => m.toUpperCase())
@@ -76,7 +82,7 @@ export default function App() {
         )
         if (!match) return
         handleSetMyDevice(match.data.id)
-        // OS·MAC 미입력 장비에 로컬 정보 자동 기입 (backend가 vendor 자동 계산)
+        // OS·MAC 미입력 장비에 로컬 정보 자동 기입 (backend 가 vendor 자동 계산)
         const patch = {}
         if (!match.data.os && os) patch.os = os
         if (!match.data.mac_address && local_macs[match.data.ip_address]) {

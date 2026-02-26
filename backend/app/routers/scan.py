@@ -1,4 +1,4 @@
-import ipaddress
+﻿import ipaddress
 import socket
 import subprocess
 import re
@@ -254,3 +254,4 @@ def scan_network(payload: ScanRequest, db: Session = Depends(get_db)):
         db.commit()
 
     return results
+

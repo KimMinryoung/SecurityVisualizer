@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, ForeignKey, Enum, UniqueConstraint
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -8,10 +8,14 @@ class Network(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    subnet = Column(String, nullable=False)  # CIDR notation
+    subnet = Column(String, nullable=False, index=True)  # CIDR notation
     vlan_id = Column(Integer, nullable=True)
     gateway = Column(String, nullable=True)
     description = Column(String, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint('subnet', name='uq_networks_subnet'),
+    )
 
     devices = relationship("Device", back_populates="network")
 
