@@ -11,6 +11,9 @@ const DEVICE_EMOJI = {
   switch:      '🔀',
   firewall:    '🔥',
   other:       '📱',
+  bt_audio:    '🎧',
+  bt_input:    '🖱️',
+  bt_other:    '📶',
 }
 
 const DEVICE_COLORS = {
@@ -20,6 +23,9 @@ const DEVICE_COLORS = {
   switch:      '#7c3aed',
   firewall:    '#dc2626',
   other:       '#64748b',
+  bt_audio:    '#818cf8',
+  bt_input:    '#818cf8',
+  bt_other:    '#818cf8',
 }
 
 const REQUIRED_TYPES = ['antivirus', 'EDR', 'firewall']
@@ -58,6 +64,7 @@ function ipInCidr(ip, cidr) {
 
 function networkEmoji(name = '') {
   const n = name.toLowerCase()
+  if (n.includes('bluetooth'))                          return '📶'
   if (n.includes('dmz'))                               return '🛡️'
   if (n.includes('mgmt') || n.includes('management')) return '⚙️'
   if (n.includes('corp') || n.includes('lan') || n.includes('office')) return '🏢'
@@ -209,6 +216,28 @@ function buildStylesheet() {
         opacity: 0.85,
       },
     },
+    // 블루투스 연결 (활성)
+    {
+      selector: 'edge[type="bluetooth"]',
+      style: {
+        width: 2,
+        'line-color': '#818cf8',
+        'curve-style': 'bezier',
+        opacity: 0.85,
+      },
+    },
+    // 블루투스 비활성 (페어링만 된 상태)
+    {
+      selector: 'edge[type="bluetooth-inactive"]',
+      style: {
+        width: 1.5,
+        'line-color': '#818cf8',
+        'line-style': 'dashed',
+        'line-dash-pattern': [4, 3],
+        'curve-style': 'bezier',
+        opacity: 0.4,
+      },
+    },
   ]
 }
 
@@ -230,11 +259,13 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
   for (const node of topology.nodes) {
     if (node.type !== 'network') continue
     const emoji = networkEmoji(node.data?.name)
+    const isBtNet = (node.data?.subnet || '') === 'bluetooth'
+    const netDesc = isBtNet ? '(이 PC에 페어링된 장치들)' : '(같은 공유기에 연결된 장치들)'
     elements.push({
       data: {
         ...node.data,
         id: node.id,
-        label: `${emoji} ${node.data?.name || node.label}\n${node.data?.subnet || ''}\n(같은 공유기에 연결된 장치들)`,
+        label: `${emoji} ${node.data?.name || node.label}\n${isBtNet ? '' : (node.data?.subnet || '')}\n${netDesc}`,
         type: 'network',
       },
     })
@@ -305,14 +336,16 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
       },
     })
 
-    // 장비 원 (hostname + IP를 원 안에 표시)
+    // 장비 원 (hostname + IP를 원 안에 표시, BT 장비는 MAC 표시)
+    const isBt = ip.startsWith('bt:')
+    const displayLine3 = isBt ? (node.data?.mac_address || 'Bluetooth') : ip
     elements.push({
       data: {
         ...node.data,
         id: node.id,
         parent: `wrap-${node.id}`,
         deviceId: node.data?.id,          // 백엔드 정수 id 보존 (API 호출용)
-        label: `${emoji}\n${hostname}\n${ip}`,
+        label: `${emoji}\n${hostname}\n${displayLine3}`,
         type: 'device',
         bgColor: coverageMode
           ? COVERAGE_COLORS[coverageStatus(solutions)]
@@ -348,6 +381,30 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
           type: 'gateway',
         },
       })
+    }
+  }
+
+  // 블루투스 장비 → 내 PC 연결 엣지
+  if (myDeviceId) {
+    const myNode = topology.nodes.find(
+      n => n.type === 'device' && String(n.data?.id) === String(myDeviceId)
+    )
+    if (myNode) {
+      for (const node of topology.nodes) {
+        if (node.type !== 'device') continue
+        const ip = node.data?.ip_address || ''
+        if (ip.startsWith('bt:')) {
+          const active = node.data?.status === 'active'
+          elements.push({
+            data: {
+              id: `e-bt-${node.id}`,
+              source: node.id,
+              target: myNode.id,
+              type: active ? 'bluetooth' : 'bluetooth-inactive',
+            },
+          })
+        }
+      }
     }
   }
 
@@ -442,9 +499,11 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
         const isMyDev  = myDeviceId && String(node.data?.id) === String(myDeviceId)
         const role     = gatewayRoles[ip]
         const emoji    = DEVICE_EMOJI[node.data?.device_type || 'other'] || '📱'
+        const isBt     = ip.startsWith('bt:')
+        const line3    = isBt ? (node.data?.mac_address || 'Bluetooth') : ip
 
         cy.getElementById(node.id)?.data({
-          label: `${emoji}\n${hostname}\n${ip}`,
+          label: `${emoji}\n${hostname}\n${line3}`,
           isMyDevice: isMyDev ? 'true' : 'false',
         })
         cy.getElementById(`wrap-${node.id}`)?.data({
@@ -518,6 +577,7 @@ const LEGEND_ITEMS = [
   { emoji: '🔥', label: '방화벽 (Firewall)' },
   { emoji: '📍', label: '내 PC (자동 감지)' },
   { emoji: '🔀', label: '기본 게이트웨이' },
+  { emoji: '🎧', label: '블루투스 장치' },
 ]
 
 const COVERAGE_LEGEND = [
@@ -550,6 +610,18 @@ function Legend({ coverageMode, vulnMode }) {
           <polygon points="22,0 28,4 22,8" fill="#f59e0b" />
         </svg>
         <span style={{ fontSize: 11 }}>인터넷 경로 (게이트웨이 경유)</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+        <svg width="28" height="8" style={{ flexShrink: 0 }}>
+          <line x1="0" y1="4" x2="28" y2="4" stroke="#818cf8" strokeWidth="2" />
+        </svg>
+        <span style={{ fontSize: 11 }}>블루투스 연결 (활성)</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+        <svg width="28" height="8" style={{ flexShrink: 0 }}>
+          <line x1="0" y1="4" x2="28" y2="4" stroke="#818cf8" strokeWidth="1.5" strokeDasharray="4,3" />
+        </svg>
+        <span style={{ fontSize: 11 }}>블루투스 (비활성)</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #1e2235' }}>
         <svg width="28" height="8" style={{ flexShrink: 0 }}>

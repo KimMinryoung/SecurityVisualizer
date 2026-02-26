@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../api/client.js'
 import ScanDialog from './ScanDialog.jsx'
 import RouterImportDialog from './RouterImportDialog.jsx'
+import BluetoothDialog from './BluetoothDialog.jsx'
 
 const REQUIRED_TYPES = ['antivirus', 'EDR', 'firewall']
 const COVERAGE_COLORS = { full: '#16a34a', partial: '#ca8a04', missing: '#dc2626' }
@@ -62,6 +63,7 @@ export default function Toolbar({ networks, onRefresh, coverageMode, setCoverage
   const [showAddNetwork, setShowAddNetwork] = useState(false)
   const [showScan, setShowScan] = useState(false)
   const [showRouterImport, setShowRouterImport] = useState(false)
+  const [showBtScan, setShowBtScan] = useState(false)
   const [deviceForm, setDeviceForm] = useState({ hostname: '', ip_address: '', os: '', device_type: 'workstation', network_id: '' })
   const [networkForm, setNetworkForm] = useState({ name: '', subnet: '', gateway: '', vlan_id: '', description: '' })
   const [error, setError] = useState('')
@@ -133,6 +135,9 @@ export default function Toolbar({ networks, onRefresh, coverageMode, setCoverage
         </button>
         <button style={{ ...styles.btn, background: '#1a2e1a', color: '#4ade80' }} onClick={() => setShowRouterImport(true)}>
           📡 공유기
+        </button>
+        <button style={{ ...styles.btn, background: '#1a1a2e', color: '#818cf8' }} onClick={() => setShowBtScan(true)}>
+          📶 블루투스
         </button>
         <button
           style={{
@@ -236,6 +241,13 @@ export default function Toolbar({ networks, onRefresh, coverageMode, setCoverage
           topology={topology}
           onImport={onRefresh}
           onClose={() => setShowRouterImport(false)}
+        />
+      )}
+
+      {showBtScan && (
+        <BluetoothDialog
+          onImport={onRefresh}
+          onClose={() => setShowBtScan(false)}
         />
       )}
 

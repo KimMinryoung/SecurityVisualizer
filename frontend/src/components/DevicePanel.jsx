@@ -244,7 +244,19 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
               )}
 
               {/* 내 PC 표식 */}
-              {String(device.id) === String(myDeviceId) ? (
+              {device.ip_address?.startsWith('bt:') ? (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  background: '#1a1a2e', border: '1px solid #4338ca',
+                  borderRadius: 8, padding: '8px 12px', marginBottom: 16,
+                }}>
+                  <span style={{ fontSize: 18 }}>📶</span>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#818cf8' }}>블루투스 장치</div>
+                    <div style={{ fontSize: 11, color: '#6366f1' }}>내 PC에 페어링된 장치</div>
+                  </div>
+                </div>
+              ) : String(device.id) === String(myDeviceId) ? (
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   background: '#78350f', border: '1px solid #fbbf24',
@@ -273,7 +285,11 @@ export default function DevicePanel({ selectedNode, myDeviceId, gatewayRoles = {
               )}
 
               <InfoRow label="Hostname" value={device.hostname} />
-              <InfoRow label="IP Address" value={device.ip_address} />
+              {device.ip_address?.startsWith('bt:') ? (
+                <InfoRow label="연결" value="Bluetooth" />
+              ) : (
+                <InfoRow label="IP Address" value={device.ip_address} />
+              )}
               <InfoRow label="MAC" value={device.mac_address || '—'} />
               <InfoRow label="Vendor" value={device.vendor || '—'} />
               <InfoRow label="OS" value={device.os || '—'} />

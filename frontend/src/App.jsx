@@ -26,6 +26,8 @@ export default function App() {
 
   const loadData = useCallback(async () => {
     try {
+      // BT 장비 status를 현재 연결 상태로 갱신한 뒤 topology 조회
+      await api.refreshBtStatus().catch(() => {})
       const [topo, nets] = await Promise.all([api.getTopology(), api.listNetworks()])
       setTopology(topo)
       setNetworks(nets)

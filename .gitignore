@@ -59,6 +59,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+temp_dev/temp_onlyforlocaldev/
 .claude/
 git-push.bat
 

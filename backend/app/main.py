@@ -11,6 +11,7 @@ from .routers.scan import _get_interfaces
 from .routers.solutions import sol_router, assign_router
 from .routers.vulnerabilities import router as vuln_router
 from .routers.router_import import router as router_import_router
+from .routers.bluetooth import router as bluetooth_router
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -62,6 +63,7 @@ app.include_router(topology.router)
 app.include_router(scan.router)
 app.include_router(vuln_router)
 app.include_router(router_import_router)
+app.include_router(bluetooth_router)
 
 
 def _local_os() -> str:

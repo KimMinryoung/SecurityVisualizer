@@ -1,6 +1,6 @@
 # SecurityVisualizer — Development Plan
 
-## Current Phase: Phase 6 — Device Vendor Identification
+## Current Phase: Phase 8 — Bluetooth Device Scanning
 
 ### Status: COMPLETE
 
@@ -117,7 +117,30 @@ playwright install chromium
 
 ---
 
-## Phase 8 — 다음 후보 (미정)
+## Phase 8 — Bluetooth Device Scanning
+**Status: COMPLETE**
+
+- [x] `backend/app/routers/bluetooth.py` — PowerShell `Get-PnpDevice` 기반 BT 장치 스캔
+  - `GET /api/scan/bluetooth/` — 페어링된 BT 장치 목록 반환
+  - `POST /api/scan/bluetooth/import` — 선택 장치 DB 등록
+  - InstanceId에서 MAC 추출 (`Dev_AABBCCDDEEFF` 패턴)
+  - 이름 기반 장치 유형 자동 분류 (bt_audio, bt_input, bt_other)
+  - MAC 기반 중복 체크
+- [x] 가상 "Bluetooth" Network (subnet="bluetooth") 자동 생성
+- [x] Device.ip_address에 `bt:<MAC>` 합성 값 저장 (NOT NULL 제약 우회)
+- [x] `frontend/src/components/BluetoothDialog.jsx` — BT 스캔 다이얼로그
+- [x] `frontend/src/components/Toolbar.jsx` — 📶 블루투스 버튼
+- [x] `frontend/src/components/NetworkGraph.jsx` — BT 장치 이모지/색상, BT→내PC 점선 엣지, 범례
+- [x] `frontend/src/components/DevicePanel.jsx` — BT 장치 배지, IP 대신 "연결: Bluetooth" 표시
+
+### 알려진 제약
+- Windows 전용 (PowerShell Get-PnpDevice)
+- MAC 없는 BT 장치는 임포트 불가 (InstanceId에 Dev_ 패턴 없는 경우)
+- 장치 유형 분류는 이름 키워드 기반 (정확도 제한)
+
+---
+
+## Phase 9 — 다음 후보 (미정)
 
 - 장비별 위험 점수(Risk Score) 계산 및 표시
 - 취약점 → 보안 솔루션 권고 매핑

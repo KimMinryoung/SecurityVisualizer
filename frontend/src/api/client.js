@@ -50,6 +50,11 @@ export const api = {
   // Router import
   fetchRouterClients: (password, url) => req('POST', '/api/router/clients', { password, url }),
 
+  // Bluetooth scan
+  scanBluetooth: () => req('GET', '/api/scan/bluetooth/'),
+  importBluetooth: (devices) => req('POST', '/api/scan/bluetooth/import', { devices }),
+  refreshBtStatus: () => req('POST', '/api/scan/bluetooth/refresh-status'),
+
   // Device vulnerabilities
   listDeviceVulns:  (deviceId) => req('GET',    `/api/devices/${deviceId}/vulnerabilities`),
   addVuln:          (deviceId, data) => req('POST',   `/api/devices/${deviceId}/vulnerabilities`, data),
