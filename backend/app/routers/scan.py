@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from ..database import get_db
-from ..models import Device
+from ..models import Device, Network
 from ..oui import lookup as oui_lookup
 
 router = APIRouter(prefix="/api/scan", tags=["scan"])
@@ -200,25 +200,47 @@ def scan_network(payload: ScanRequest, db: Session = Depends(get_db)):
 
     arp = _arp_table()
     existing_devices = db.query(Device).all()
-    existing_ips = {d.ip_address for d in existing_devices}
-    existing_hostnames = {d.hostname.lower() for d in existing_devices if d.hostname}
 
     results = []
     seen_hostnames: set = set()
+    db_dirty = False
 
     for ip in sorted(live, key=ipaddress.ip_address):
         hostname = _hostname(ip)
         hostname_key = hostname.lower()
+        mac = arp.get(ip)
 
-        already = ip in existing_ips or (
-            hostname_key != ip.lower() and hostname_key in existing_hostnames
-        )
+        # MAC → hostname → IP 순서로 기존 장비 매칭
+        matched = None
+        if mac:
+            matched = next((d for d in existing_devices if d.mac_address and d.mac_address.upper() == mac.upper()), None)
+        if not matched and hostname_key != ip.lower():
+            matched = next((d for d in existing_devices if d.hostname and d.hostname.lower() == hostname_key), None)
+        if not matched:
+            matched = next((d for d in existing_devices if d.ip_address == ip), None)
+
+        already = matched is not None
+
+        # IP 변경 감지 → 기존 장비 IP/네트워크 자동 갱신
+        if matched and matched.ip_address != ip:
+            matched.ip_address = ip
+            if hostname != ip:
+                matched.hostname = hostname
+            if mac and not matched.mac_address:
+                matched.mac_address = mac
+            # 스캔 CIDR에 해당하는 네트워크로 이동
+            scan_net = db.query(Network).filter(Network.subnet == payload.cidr).first()
+            if not scan_net:
+                scan_net = Network(name=payload.cidr, subnet=payload.cidr)
+                db.add(scan_net)
+                db.flush()
+            matched.network_id = scan_net.id
+            db_dirty = True
 
         if hostname_key != ip.lower() and hostname_key in seen_hostnames:
             continue
         seen_hostnames.add(hostname_key)
 
-        mac = arp.get(ip)
         results.append(ScanResult(
             ip_address=ip,
             hostname=hostname,
@@ -227,5 +249,8 @@ def scan_network(payload: ScanRequest, db: Session = Depends(get_db)):
             already_registered=already,
             role=gateway_roles.get(ip),
         ))
+
+    if db_dirty:
+        db.commit()
 
     return results

@@ -1,5 +1,8 @@
 import { useEffect, useRef } from 'react'
 import cytoscape from 'cytoscape'
+import coseBilkent from 'cytoscape-cose-bilkent'
+
+cytoscape.use(coseBilkent)
 
 const DEVICE_EMOJI = {
   workstation: '💻',
@@ -134,10 +137,10 @@ function buildStylesheet() {
         'font-size': '12px',
         color: '#a5b4fc',
         'text-wrap': 'wrap',
-        'text-max-width': '130px',
+        'text-max-width': '200px',
         shape: 'roundrectangle',
-        width: 130,
-        height: 62,
+        width: 200,
+        height: 72,
       },
     },
     // Device circle: hostname + IP 안에 표시
@@ -193,6 +196,19 @@ function buildStylesheet() {
         opacity: 0.25,
       },
     },
+    // 게이트웨이 → 인터넷 라우팅 경로
+    {
+      selector: 'edge[type="gateway"]',
+      style: {
+        width: 2.5,
+        'line-color': '#f59e0b',
+        'curve-style': 'bezier',
+        'target-arrow-shape': 'triangle',
+        'target-arrow-color': '#f59e0b',
+        'arrow-scale': 1.2,
+        opacity: 0.85,
+      },
+    },
   ]
 }
 
@@ -204,6 +220,12 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
   // Internet (synthetic)
   elements.push({ data: { id: 'internet', label: '🌐\nInternet', type: 'internet' } })
 
+  // 게이트웨이 IP 목록 (나중에 라우팅 엣지 생성용)
+  const gwIps = new Set(Object.keys(gatewayRoles))
+  const registeredDeviceIps = new Set(
+    topology.nodes.filter(n => n.type === 'device').map(n => n.data?.ip_address)
+  )
+
   // Network nodes + internet edges
   for (const node of topology.nodes) {
     if (node.type !== 'network') continue
@@ -212,21 +234,54 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
       data: {
         ...node.data,
         id: node.id,
-        label: `${emoji} ${node.data?.name || node.label}\n${node.data?.subnet || ''}`,
+        label: `${emoji} ${node.data?.name || node.label}\n${node.data?.subnet || ''}\n(같은 공유기에 연결된 장치들)`,
         type: 'network',
       },
     })
-    const isPublic =
-      (node.data?.name || '').toLowerCase().includes('dmz') ||
-      (node.data?.subnet || '').startsWith('10.')
+    // 이 네트워크 서브넷에 해당하는 게이트웨이가 있으면 직접 연결 생략
+    const subnet = node.data?.subnet || ''
+    const hasGwForSubnet = [...gwIps].some(ip => subnet && ipInCidr(ip, subnet))
+    if (!hasGwForSubnet) {
+      const isPublic =
+        (node.data?.name || '').toLowerCase().includes('dmz') ||
+        (node.data?.subnet || '').startsWith('10.')
+      elements.push({
+        data: {
+          id: `e-internet-${node.id}`,
+          source: 'internet',
+          target: node.id,
+          type: isPublic ? 'internet' : 'membership',
+        },
+      })
+    }
+  }
+
+  // 미등록 게이트웨이 → 가상 노드 생성 + 인터넷 엣지
+  for (const [gwIp, role] of Object.entries(gatewayRoles)) {
+    if (registeredDeviceIps.has(gwIp)) continue  // 등록된 장비면 스킵
+    const synId = `syn-gw-${gwIp.replace(/\./g, '-')}`
+    elements.push({
+      data: { id: `wrap-${synId}`, type: 'device-wrapper', categoryLabel: `🔀 ${role}` },
+    })
     elements.push({
       data: {
-        id: `e-internet-${node.id}`,
-        source: 'internet',
-        target: node.id,
-        type: isPublic ? 'internet' : 'membership',
+        id: synId, parent: `wrap-${synId}`,
+        label: `🌐\n게이트웨이\n${gwIp}`,
+        type: 'device', bgColor: '#e09c28', isMyDevice: 'false',
       },
     })
+    elements.push({
+      data: { id: `e-gw-${synId}`, source: synId, target: 'internet', type: 'gateway' },
+    })
+    // 해당 서브넷 네트워크에 연결
+    for (const netNode of topology.nodes) {
+      if (netNode.type !== 'network') continue
+      if (netNode.data?.subnet && ipInCidr(gwIp, netNode.data.subnet)) {
+        elements.push({
+          data: { id: `e-syn-${synId}-${netNode.id}`, source: synId, target: netNode.id, type: 'membership' },
+        })
+      }
+    }
   }
 
   // Device wrapper + device nodes
@@ -278,6 +333,22 @@ function toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, 
     elements.push({
       data: { id: edge.id, source: edge.source, target: edge.target, type: online ? 'membership' : 'membership-offline' },
     })
+  }
+
+  // 게이트웨이 장비 → 인터넷 라우팅 엣지
+  for (const node of topology.nodes) {
+    if (node.type !== 'device') continue
+    const ip = node.data?.ip_address || ''
+    if (gwIps.has(ip)) {
+      elements.push({
+        data: {
+          id: `e-gw-${node.id}`,
+          source: node.id,
+          target: 'internet',
+          type: 'gateway',
+        },
+      })
+    }
   }
 
   return elements
@@ -339,15 +410,21 @@ export default function NetworkGraph({ topology, myDeviceId, gatewayRoles = {}, 
       cy.elements().remove()
       cy.add(toElements(topology, myDeviceId, gatewayRoles, coverageMode, vulnMode, activeCidrs))
       cy.layout({
-        name: 'cose',
+        name: 'cose-bilkent',
         animate: false,
-        nodeRepulsion: () => 18000,
-        idealEdgeLength: () => 150,
-        edgeElasticity: () => 0.08,
-        gravity: 0.2,
-        numIter: 800,
+        nodeRepulsion: 8000,
+        idealEdgeLength: 100,
+        edgeElasticity: 0.45,
+        gravity: 1.0,
+        gravityRange: 2.0,
+        numIter: 2500,
+        nestingFactor: 0.1,
+        nodeDimensionsIncludeLabels: true,
         fit: true,
-        padding: 60,
+        padding: 40,
+        tile: true,
+        tilingPaddingVertical: 20,
+        tilingPaddingHorizontal: 20,
       }).run()
     } else {
       // 레이아웃 유지 — 엣지 온/오프라인 타입 갱신
@@ -466,6 +543,13 @@ function Legend({ coverageMode, vulnMode }) {
     }}>
       <div style={{ fontWeight: 700, marginBottom: 8, color: '#64748b', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
         범례 (Legend)
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4 }}>
+        <svg width="28" height="8" style={{ flexShrink: 0 }}>
+          <line x1="0" y1="4" x2="22" y2="4" stroke="#f59e0b" strokeWidth="2.5" />
+          <polygon points="22,0 28,4 22,8" fill="#f59e0b" />
+        </svg>
+        <span style={{ fontSize: 11 }}>인터넷 경로 (게이트웨이 경유)</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #1e2235' }}>
         <svg width="28" height="8" style={{ flexShrink: 0 }}>

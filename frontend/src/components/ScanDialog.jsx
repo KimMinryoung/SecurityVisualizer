@@ -33,8 +33,6 @@ export default function ScanDialog({ networks, onImport, onClose }) {
   const [scannedCidrs, setScannedCidrs] = useState([])
   const [results, setResults] = useState([])
   const [selected, setSelected] = useState(new Set())
-  const [networkId, setNetworkId] = useState(networks[0]?.id ?? '__new__')
-  const [newNetworkName, setNewNetworkName] = useState('')
   const [deviceType, setDeviceType] = useState('workstation')
   const [error, setError] = useState('')
   const [importing, setImporting] = useState(false)
@@ -79,7 +77,7 @@ export default function ScanDialog({ networks, onImport, onClose }) {
           // 이번 스캔 내 hostname 중복 제거 (다중 어댑터 동일 PC 방지)
           if (key !== r.ip_address.toLowerCase() && seenHostnames.has(key)) continue
           seenHostnames.add(key)
-          allResults.push(r)
+          allResults.push({ ...r, _cidr: cidr })  // 소속 CIDR 태깅
         }
       } catch (_) {
         // 해당 서브넷 스캔 실패는 무시하고 계속 진행
@@ -89,6 +87,8 @@ export default function ScanDialog({ networks, onImport, onClose }) {
     setResults(allResults)
     setSelected(new Set(allResults.filter(r => !r.already_registered).map(r => r.ip_address)))
     setPhase('done')
+    // 스캔 중 백엔드가 기존 장비 IP/네트워크를 갱신했을 수 있으므로 토폴로지 새로고침
+    onImport()
   }
 
   async function handleImport() {
@@ -98,22 +98,34 @@ export default function ScanDialog({ networks, onImport, onClose }) {
     setImporting(true)
     setError('')
     try {
-      let targetNetworkId = networkId
-      if (networkId === '__new__') {
-        const name = newNetworkName.trim() || (scannedCidrs[0] ?? 'My Network')
-        const net = await api.createNetwork({ name, subnet: scannedCidrs[0] ?? '0.0.0.0/0' })
-        targetNetworkId = net.id
-      }
+      // CIDR별로 그룹핑
+      const byCidr = {}
       for (const host of toImport) {
-        await api.createDevice({
-          hostname: host.hostname,
-          ip_address: host.ip_address,
-          mac_address: host.mac_address ?? undefined,
-          device_type: deviceType,
-          network_id: parseInt(targetNetworkId),
-          status: 'active',
-        })
-        // vendor는 backend create_device에서 MAC OUI로 자동 계산됨
+        const cidr = host._cidr || scannedCidrs[0] || '0.0.0.0/0'
+        if (!byCidr[cidr]) byCidr[cidr] = []
+        byCidr[cidr].push(host)
+      }
+
+      // 기존 네트워크 목록 최신화
+      const currentNetworks = await api.listNetworks()
+
+      for (const [cidr, hosts] of Object.entries(byCidr)) {
+        // 같은 서브넷의 기존 네트워크 찾기
+        let net = currentNetworks.find(n => n.subnet === cidr)
+        if (!net) {
+          net = await api.createNetwork({ name: cidr, subnet: cidr })
+          currentNetworks.push(net)
+        }
+        for (const host of hosts) {
+          await api.createDevice({
+            hostname: host.hostname,
+            ip_address: host.ip_address,
+            mac_address: host.mac_address ?? undefined,
+            device_type: deviceType,
+            network_id: net.id,
+            status: 'active',
+          })
+        }
       }
       onImport()
       onClose()
@@ -270,21 +282,11 @@ export default function ScanDialog({ networks, onImport, onClose }) {
             {newCount > 0 && (
               <div style={{ borderTop: '1px solid #2d3148', paddingTop: 14, display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 150 }}>
-                  <div style={S.label}>네트워크 배정</div>
-                  <select style={{ ...S.input, fontFamily: 'inherit' }} value={networkId} onChange={e => setNetworkId(e.target.value)}>
-                    <option value="__new__">+ 새 네트워크 만들기</option>
-                    {networks.map(n => <option key={n.id} value={n.id}>{n.name} ({n.subnet})</option>)}
-                  </select>
-                  {networkId === '__new__' && (
-                    <input
-                      style={{ ...S.input, marginTop: 6, fontFamily: 'inherit' }}
-                      placeholder="네트워크 이름"
-                      value={newNetworkName}
-                      onChange={e => setNewNetworkName(e.target.value)}
-                    />
-                  )}
+                  <div style={{ fontSize: 11, color: '#64748b' }}>
+                    서브넷별 자동 배정: {[...new Set(results.filter(r => selected.has(r.ip_address) && !r.already_registered).map(r => r._cidr))].join(', ') || '—'}
+                  </div>
                 </div>
-                <div style={{ flex: 1, minWidth: 120 }}>
+                <div style={{ minWidth: 120 }}>
                   <div style={S.label}>장비 유형</div>
                   <select style={{ ...S.input, fontFamily: 'inherit' }} value={deviceType} onChange={e => setDeviceType(e.target.value)}>
                     {['workstation', 'server', 'router', 'switch', 'firewall', 'other'].map(t => (

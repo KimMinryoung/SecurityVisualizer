@@ -56,22 +56,28 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  // topology 로드 후 접속자 IP로 내 PC 자동 감지 + OS 자동 채움
+  // topology 로드 후 접속자 IP/MAC으로 내 PC 자동 감지 + OS 자동 채움
   useEffect(() => {
     if (!topology) return
     api.whoami()
-      .then(({ ip, local_ips = [], os }) => {
+      .then(({ ip, local_ips = [], local_macs = {}, os }) => {
         // HTTP 클라이언트 IP(127.0.0.1 등)와 실제 인터페이스 IP 모두 시도
         const candidates = new Set([ip, ...local_ips])
+        const localMacSet = new Set(
+          Object.values(local_macs).map(m => m.toUpperCase())
+        )
+        // IP 매칭 → MAC 매칭 순서로 내 PC 탐색
         const match = topology.nodes.find(
           n => n.type === 'device' && candidates.has(n.data?.ip_address)
+        ) || topology.nodes.find(
+          n => n.type === 'device' && n.data?.mac_address && localMacSet.has(n.data.mac_address.toUpperCase())
         )
         if (!match) return
         handleSetMyDevice(match.data.id)
         // OS·MAC 미입력 장비에 로컬 정보 자동 기입 (backend가 vendor 자동 계산)
         const patch = {}
         if (!match.data.os && os) patch.os = os
-        if (!match.data.mac_address && local_macs?.[match.data.ip_address]) {
+        if (!match.data.mac_address && local_macs[match.data.ip_address]) {
           patch.mac_address = local_macs[match.data.ip_address]
         }
         if (Object.keys(patch).length > 0) {

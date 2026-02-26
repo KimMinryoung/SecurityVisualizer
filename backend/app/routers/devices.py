@@ -41,6 +41,22 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db)):
     network = db.query(Network).filter(Network.id == payload.network_id).first()
     if not network:
         raise HTTPException(status_code=400, detail="Network not found")
+
+    # MAC 기반 중복 체크 — 같은 MAC이면 기존 장비의 IP/네트워크를 업데이트
+    if payload.mac_address:
+        existing = (
+            db.query(Device)
+            .filter(Device.mac_address.ilike(payload.mac_address))
+            .first()
+        )
+        if existing:
+            existing.ip_address = payload.ip_address
+            existing.hostname = payload.hostname or existing.hostname
+            existing.network_id = payload.network_id
+            existing.vendor = oui_lookup(payload.mac_address) or existing.vendor
+            db.commit()
+            return _get_device(existing.id, db)
+
     data = payload.model_dump()
     data["vendor"] = oui_lookup(data.get("mac_address") or "")
     device = Device(**data)
